@@ -1,78 +1,295 @@
 # pi-switch
 
-AI Agent Model Gateway & Provider Manager（pi agent Extension）
+[![CI](https://github.com/XUHONGHAO/pi-switch/actions/workflows/ci.yml/badge.svg)](https://github.com/XUHONGHAO/pi-switch/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.19-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-通过统一接口管理多个 AI Provider、API Key、模型别名以及请求路由。
+面向 [pi coding agent](https://github.com/badlogic/pi-mono) 的多 Provider 模型网关与配置管理扩展。
 
-## 状态
+使用一个模型别名连接多条上游线路，在 OpenAI、Anthropic、Gemini 及兼容服务之间进行优先级路由、故障切换或负载均衡；同时提供中文 TUI 配置界面、API Key 池、线路健康管理和请求统计。
 
-- 版本：v0.3.2
-- 当前阶段：**v0.3.2 正确性修复** 已完成
-- 开发计划见 [pi-switch.md](../pi-switch.md)
-- **完整安装与使用指南见 [INSTALL.md](INSTALL.md)**
+## 为什么使用 pi-switch？
 
-## Phase 8 能力
+如果同一个模型存在官方 API、中转服务和多个 API Key，通常需要反复修改 Provider 与模型配置。pi-switch 将它们统一成一个稳定别名：
 
-- **`/config` 命令**：TUI 向导式配置（Providers / 模型别名 / 账号 / 路由策略），无需手编 JSON
-  - `/config providers` / `/config add-provider`：新增、编辑、删除 Provider（baseUrl / apiKey / 自动发现）
-  - `/config models`：新增、编辑、删除别名及其线路（model / priority / strategy）
-  - `/config accounts`：管理 Key 池账号
-  - `/config strategy <s>`：一键设置路由策略
-  - `/config reload`：从磁盘热重载配置
-- **热重载**：ConfigStore 使配置可实时更新，保存后自动重新注册 Provider 与别名，**无需重启 pi**
-- **Key 打码**：界面中 apiKey 只显示 `sk-****`，留空 = 不变
+```text
+pi-switch/gpt5
+  ├─ OpenAI Official / gpt-5
+  ├─ OpenAI Compatible / gpt-5
+  └─ Backup Provider / gpt-5
+```
 
-## 已完成
+调用方始终使用 `pi-switch/gpt5`。上游发生网络错误、限流或服务异常时，可按照配置自动选择其他线路。
 
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| Phase 1 | extension 入口、配置加载、Provider 注册 | 已完成 |
-| Phase 2 | OpenAI Compatible Provider（模型发现 + 真实请求通路） | 已完成 |
-| Phase 3 | 模型别名系统（models.json + 别名解析 + 流式转发） | 已完成 |
-| Phase 4 | Router（priority / failover / balance + 自动切换） | 已完成 |
-| Phase 5 | `/switch` 选择 UI + preset 集成 | 已完成 |
-| Phase 6 | 多账号 Key 池（priority / 禁用 / failover） | 已完成 |
-| Phase 7 | 请求统计（请求数 / 成功率 / 延迟 / failover） | 已完成 |
-| Phase 8 | TUI 配置界面（/config 向导 + 热重载） | 已完成 |
+## 功能特性
 
-## v0.3.2 正确性
+- **统一模型别名**：一个名称聚合不同 Provider、endpoint、协议和真实模型 ID
+- **三种路由策略**：
+  - `priority`：仅使用最高优先级线路
+  - `failover`：失败时按优先级自动切换
+  - `balance`：在线路之间轮询
+- **原生多协议转发**：支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Google Generative AI
+- **多账号 Key 池**：同一 Provider 可配置多个 API Key，并按优先级选择或故障切换
+- **Circuit Breaker**：连续失败后暂时跳过异常线路，并识别 `429` 与 `Retry-After`
+- **中文 TUI 配置**：通过 `/config` 管理 Provider、模型别名、账号和路由，无需手写 JSON
+- **热重载**：配置保存后立即重新注册模型，无需重启 pi
+- **模型发现与缓存**：支持 `/models` 自动发现、glob 过滤和离线缓存
+- **认证复用**：可复用 pi 的 `/login`、OAuth、环境变量、动态 Header 与 `!command`
+- **请求统计与诊断**：记录成功率、延迟和 failover，并提供静态检查与主动探测
+- **安全配置**：界面中 API Key 打码，配置保存前执行结构和字段校验
 
-- **`/config strategy` 合并写回**：只改 strategy，不再冲掉 `failureThreshold` / `cooldownMs` / `rateLimitCooldownMs`
-- **删除 Provider 级联**：有账号/别名引用时提示并支持一并清理，避免保存校验失败
-- **`!command` 模型发现**：启动发现与 `refreshModels` 和请求路径使用同一套 Secret 解析
-- **别名 `input` 透传**：`models.json` 可声明 `input: ["text","image"]`，vision 不再被写死为纯文本
-- **留空语义统一**：编辑 apiKey 时留空 = 不变；Provider 需显式「清除 apiKey」
+## 环境要求
 
-## v0.3.1 稳定化
+- Node.js `>= 22.19.0`
+- pi coding agent `0.84.x`
+- Windows、Linux 或 macOS
 
-- **Binding 级线路身份**：Circuit Breaker 与 AttemptStats 不再只按 Provider 聚合；默认使用 `provider/api/baseUrl/model`，也可通过 binding `id` 显式指定稳定标识
-- **结构化 HTTP 错误**：优先使用 transport/SDK 的状态码分类 401/403、429、408/504、5xx，并从 `Retry-After` Header 计算冷却时间
-- **认证委托**：自定义 Provider 或 binding 可用 `authProvider` 委托给 pi 的内置 Provider（例如 `openai`、`anthropic`）解析 `/login`、OAuth 和动态 Header
-- **协议感知校验**：按有效 `api` 检查 `compat` 字段并对错配字段告警；`thinkingLevelMap` 支持 `max`
-- **端到端覆盖**：增加 AliasProvider → ModelRegistry header-only auth → OpenAI Responses 的真实 HTTP/SSE 测试
+确认环境：
 
-## v0.3 能力
+```bash
+node --version
+pi --version
+```
 
-- **原生多协议路由**：委托 pi-ai transport 支持 `openai-completions`、`openai-responses`、`anthropic-messages`、`google-generative-ai`
-- **Binding 级协议覆盖**：同一别名可在不同线路使用不同 `api`、`baseUrl`、`headers` 和 `compat`
-- **Thinking 映射**：Provider model 或 binding 可配置 `thinkingLevelMap`
-- **pi 原生认证复用**：未使用账号池时，通过 ModelRegistry 复用 `/login`、OAuth、环境变量、动态 Header 和 pi 配置中的 `!command`
-- **Secret command**：pi-switch 的 Provider/账号 Key 和 Header 支持请求时 `!command`；`$!` 表示字面量 `!`
-- **原生 streaming**：不自行模拟协议，直接调用 pi-ai 对应协议的 `streamSimple`
+## 安装
 
-> v0.3 当前支持上述四类 transport；Bedrock、Vertex、Azure Responses 等尚未接入 alias transport。
+目前推荐从源码安装。
 
-## v0.2 能力
+### 1. 克隆并安装依赖
 
-- **Circuit Breaker**：网络、超时、5xx 连续失败达到阈值后暂时跳过坏线路
-- **429 冷却**：识别 `Retry-After`，无提示时使用默认冷却时间
-- **Attempt 统计**：记录每条上游线路的尝试数、成功率、TTFT、总耗时和错误分类
-- **模型发现缓存与过滤**：离线启动保留模型目录，支持 include/exclude glob
-- **安全持久化**：配置/缓存/统计使用临时文件替换；统计通过跨进程锁与增量合并避免覆盖
-- **状态栏**：持续显示最近线路及打开的 circuit 数量
-- **诊断**：`/switch check` 静态检查，`/switch probe` 主动探测
+```bash
+git clone https://github.com/XUHONGHAO/pi-switch.git
+cd pi-switch
+npm install
+```
 
-路由健康参数可在 `routing.json` 中配置：
+### 2. 加载扩展
+
+临时加载，适合先体验：
+
+```bash
+pi -e ./src/index.ts
+```
+
+或者安装到 pi 的扩展目录，以便正常启动 `pi` 时自动加载。
+
+#### Windows
+
+项目附带目录联接脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\link-extension.ps1
+```
+
+取消联接：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\link-extension.ps1 -Unlink
+```
+
+#### Linux / macOS
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+ln -s "$(pwd)" ~/.pi/agent/extensions/pi-switch
+```
+
+> 扩展与当前用户拥有相同权限，请只安装可信来源的代码。
+
+## 快速开始
+
+启动交互模式：
+
+```bash
+pi -e ./src/index.ts
+```
+
+### 1. 添加 Provider
+
+在 pi 中执行：
+
+```text
+/config add-provider
+```
+
+按照界面依次填写：
+
+- Provider 标识和显示名称
+- API 协议
+- `baseUrl`
+- API Key、环境变量引用或 `!command`
+- 是否自动发现模型
+
+API Key 推荐使用环境变量，例如：
+
+```text
+$OPENAI_API_KEY
+```
+
+### 2. 创建模型别名
+
+执行：
+
+```text
+/config models
+```
+
+选择“新增模型别名”，填写别名和 `contextWindow（上下文窗口）`，再从已配置的 Provider 中添加线路。例如：
+
+```text
+别名：gpt5
+线路 1：openai_official / gpt-5
+线路 2：openai_compatible / gpt-5
+策略：failover（失败时自动切换线路）
+```
+
+### 3. 选择并使用模型
+
+```text
+/switch
+```
+
+在列表中选择刚创建的模型别名。也可以直接切换：
+
+```text
+/switch gpt5
+```
+
+命令行调用：
+
+```bash
+pi -p "你好，请介绍一下自己" --model pi-switch/gpt5 -e ./src/index.ts
+```
+
+如果已经全局链接扩展，可以省略 `-e ./src/index.ts`。
+
+## 常用命令
+
+### 模型与线路
+
+| 命令 | 说明 |
+|---|---|
+| `/switch` | 打开模型别名选择器 |
+| `/switch <alias>` | 直接切换到指定别名 |
+| `/switch status` | 查看当前模型、实际线路、账号、延迟和统计 |
+| `/switch providers` | 查看所有别名及其线路 |
+| `/switch check` | 检查配置引用、Key 池和 Circuit Breaker 状态 |
+| `/switch probe` | 主动探测 Provider 的模型接口和响应延迟 |
+
+### 配置管理
+
+| 命令 | 说明 |
+|---|---|
+| `/config` | 打开配置主菜单 |
+| `/config providers` | 管理 Provider |
+| `/config add-provider` | 新增 Provider |
+| `/config models` | 管理模型别名和线路 |
+| `/config accounts` | 管理多账号 API Key 池 |
+| `/config strategy <strategy>` | 设置全局路由策略 |
+| `/config reload` | 从磁盘重新加载配置 |
+
+## 路由策略
+
+| 策略 | 行为 | 适用场景 |
+|---|---|---|
+| `priority` | 只使用优先级最高的可用线路，失败不切换 | 必须固定使用指定上游 |
+| `failover` | 在产生内容前失败时自动尝试下一条线路 | 优先保障可用性 |
+| `balance` | 按轮询方式分配请求，失败时继续尝试 | 多线路分摊请求 |
+
+> 如果上游已经输出内容，pi-switch 不会再切换线路，以免把不同响应拼接在一起。
+
+## 配置文件
+
+配置默认保存在：
+
+```text
+~/.pi-switch/
+├── providers.json   # Provider 与协议配置
+├── models.json      # 模型别名和线路
+├── accounts.json    # 多账号 API Key 池
+├── routing.json     # 全局路由和健康参数
+└── stats.json       # 自动生成的请求统计
+```
+
+可通过环境变量 `PI_SWITCH_CONFIG_DIR` 更改配置目录。完整示例见 [`example/`](example/)。
+
+虽然推荐使用 `/config`，也可以直接编辑 JSON，然后执行 `/config reload`。
+
+### Provider 示例
+
+```json
+{
+  "openai_official": {
+    "name": "OpenAI Official",
+    "type": "openai-responses",
+    "api": "openai-responses",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "$OPENAI_API_KEY",
+    "discoverModels": false,
+    "models": [
+      {
+        "id": "gpt-5",
+        "name": "GPT-5",
+        "reasoning": true
+      }
+    ]
+  }
+}
+```
+
+支持的 API 协议：
+
+- `openai-completions`
+- `openai-responses`
+- `anthropic-messages`
+- `google-generative-ai`
+
+### 模型别名示例
+
+```json
+{
+  "gpt5": {
+    "displayName": "GPT-5",
+    "strategy": "failover",
+    "contextWindow": 1000000,
+    "providers": [
+      {
+        "provider": "openai_official",
+        "model": "gpt-5",
+        "priority": 1
+      },
+      {
+        "provider": "openai_compatible",
+        "model": "gpt-5",
+        "priority": 2
+      }
+    ]
+  }
+}
+```
+
+`contextWindow` 的默认值为 `200000`，使用默认值时可以省略。
+
+### 多账号 Key 池示例
+
+```json
+{
+  "main_key": {
+    "provider": "openai_compatible",
+    "apiKey": "$OPENAI_KEY_1",
+    "priority": 1
+  },
+  "backup_key": {
+    "provider": "openai_compatible",
+    "apiKey": "$OPENAI_KEY_2",
+    "priority": 2
+  }
+}
+```
+
+未配置账号池时使用 Provider 自身的 `apiKey`；配置账号池后，每个启用账号会作为独立候选线路。
+
+### 路由健康参数示例
 
 ```json
 {
@@ -83,224 +300,75 @@ AI Agent Model Gateway & Provider Manager（pi agent Extension）
 }
 ```
 
-## Phase 7 能力
+## API Key 与 Secret
 
-- **请求统计**：按别名 / provider / 账号记录请求数、成功率、累计与平均延迟
-- **failover 计数**：自动切换次数单独统计，反映线路健康度
-- **agent 级粒度**：pi 自动重试不重复计数（`agent_start` + `agent_settled`），每次用户请求只记一条
-- **持久化**：写入 `~/.pi-switch/stats.json`（2s 防抖 + 退出时 flush），跨会话累计
-- **状态展示**：`/switch status` 附带统计摘要
+Provider 和账号的 API Key 支持：
 
-```
-$ /switch status
-Model: pi-switch/gpt5 · Provider: sub2api · Account: sub2api_backup · Latency: 820ms TTFT · 3 req · 100% ok · avg 830ms · 2 failover(s)
+```text
+sk-...                    # 直接值，不推荐提交到版本控制
+$OPENAI_API_KEY           # 环境变量，推荐
+!secret-tool get api-key  # 请求时执行命令
 ```
 
-```json
-// ~/.pi-switch/stats.json（自动生成）
-{
-  "byAlias": { "gpt5": { "requests": 3, "successes": 3, "failovers": 6, "totalLatencyMs": 9, ... } },
-  "byProvider": { "sub2api": { ... } },
-  "byAccount": { "sub2api_backup": { ... } }
-}
-```
+请勿将真实 API Key 写入仓库。项目中的 [`example/`](example/) 只包含占位符和环境变量引用。
 
-## Phase 5 能力
+## Preset 集成
 
-### /switch 命令
-
-| 命令 | 说明 |
-|------|------|
-| `/switch` | 打开模型选择器（TUI 下带线路描述的 SelectList） |
-| `/switch gpt5` | 直接切换到别名 |
-| `/switch status` | 当前模型 + 路由线路 + 账号 + 延迟 |
-| `/switch providers` | 列出所有别名及其线路/账号 |
-| `/switch check` | 静态检查别名、Key 池和 Circuit Breaker 状态（`test` 为兼容别名） |
-| `/switch probe` | 并发请求各 Provider 的 `/models` 端点并输出延迟/状态 |
-
-```
-$ /switch status
-Model: pi-switch/gpt5 · Provider: sub2api · Account: sub2api_backup · Latency: 820ms TTFT
-```
-
-### preset 集成
-
-兼容 pi 原生 preset 格式（`~/.pi/agent/presets.json` 或项目 `.pi/presets.json`），
-`provider: "pi-switch"` 的 preset 通过别名系统路由：
+在 `~/.pi/agent/presets.json` 或项目 `.pi/presets.json` 中使用：
 
 ```json
 {
-  "coding": { "provider": "pi-switch", "model": "gpt5" },
-  "creative": { "provider": "pi-switch", "model": "claude" }
-}
-```
-
-```
-/switch preset          # 选择 pi-switch preset
-/switch preset coding   # 直接应用
-```
-
-> **注意：** pi-switch 使用 `/switch preset` 命令，不会覆盖 pi 原生的 `/preset` 命令。
-> 其他 provider 的 preset 请使用 pi 原生 preset 扩展（`/preset`）。
-> pi-switch preset（`provider: "pi-switch"`）也能通过原生 `/preset` 命令正常使用。
-
-## Phase 6 能力
-
-- **Key 池**：accounts.json 为同一 provider 配置多个 API Key
-- **账号展开**：每个启用账号展开为独立候选线路，绑定优先级为主、账号优先级为次排序
-- **账号 failover**：账号 key 无效/被限流时自动切换同 provider 的下一个账号
-- **禁用**：`enabled: false` 的账号直接跳过
-- **统计透传**：账号 `stats` 字段透传（Phase 7 写入请求次数/延迟等）
-- **回退**：provider 从未配置账号时使用 providers.json 的 `apiKey`；已配置账号池但全部禁用/不可用时不回退
-
-## 账号配置示例
-
-```json
-// ~/.pi-switch/accounts.json
-{
-  "gpt5_main": { "provider": "sub2api", "apiKey": "sk-xxxx", "priority": 1 },
-  "gpt5_backup": { "provider": "sub2api", "apiKey": "sk-yyyy", "priority": 2 },
-  "gpt5_disabled": { "provider": "sub2api", "apiKey": "sk-zzzz", "priority": 0, "enabled": false }
-}
-```
-
-failover 效果：主账号 401/限流 → 自动切备用账号，日志显示 `sub2api/acc_bad ... failing over to sub2api/acc_good`。
-
-## Phase 4 能力
-
-- **三种路由策略**：`priority`（固定最高优先级线路）、`failover`（按优先级依次尝试，失败自动切换）、`balance`（轮询）
-- **透明故障切换**：线路在**产生任何内容前**失败时自动切到下一条（failover / balance），用户无感知
-- **策略解析顺序**：models.json 别名级 `strategy` > routing.json 全局 `strategy` > 默认 `priority`
-- **绑定优先级**：绑定可配 `priority` 字段（越小越优先），同优先级保持声明顺序
-- **失败收敛**：所有线路失败后透传最后一条线路的真实错误
-
-## 路由配置示例
-
-```json
-// ~/.pi-switch/routing.json（全局默认）
-{ "strategy": "failover" }
-
-// ~/.pi-switch/models.json（别名级覆盖）
-{
-  "gpt5": {
-    "displayName": "GPT-5",
-    "strategy": "failover",
-    "providers": [
-      { "provider": "openai_official", "model": "gpt-5", "priority": 1 },
-      { "provider": "sub2api", "model": "gpt-5", "priority": 2 }
-    ]
+  "coding": {
+    "provider": "pi-switch",
+    "model": "gpt5"
   }
 }
 ```
 
-failover 效果：官方线路宕机 → 自动切到 sub2api，日志显示 `failing over to "sub2api"`。
+应用 preset：
 
-## Phase 3 能力
-
-- **统一模型别名**：models.json 中定义别名（如 `gpt5`），pi 中注册为虚拟 provider `pi-switch` 的模型（`pi-switch/gpt5`）
-- **多线路绑定**：一个别名可绑定多个 provider/model，转发时按 Router 策略选择
-- **流式转发**：请求经 binding 对应的 pi-ai 原生 `streamSimple` 实时转发，支持流式输出与工具调用
-- **健壮性**：绑定指向缺失/禁用/未配置 baseUrl 的 provider 时跳过并警告；别名无可用绑定时返回明确的错误流
-
-## 别名示例
-
-```json
-// ~/.pi-switch/models.json
-{
-  "gpt5": {
-    "displayName": "GPT-5",
-    "providers": [
-      { "provider": "sub2api", "model": "gpt-5" },
-      { "provider": "openai_official", "model": "gpt-5" }
-    ]
-  }
-}
+```text
+/switch preset coding
 ```
 
-使用：
+也可以使用 pi 原生 `/preset` 命令。pi-switch 不会覆盖该命令。
 
-```
-pi --model pi-switch/gpt5          # 直接指定
-pi -p "hi" --model pi-switch/gpt5  # print 模式
-# 交互模式 /model 中选择 GPT-5
-```
+## 故障排查
 
-请求链路：`pi-switch/gpt5` → 解析别名 → 选择 `sub2api/gpt-5` → 用 sub2api 的 baseUrl/Key 发起流式请求。
-
-## 安装与启动
-
-```bash
-cd pi-switch
-npm install
-npm run link:ext   # Windows: junction ~/.pi/agent/extensions/pi-switch -> 本仓库
-
-# 开发模式：直接用 -e 加载
-pi -e ./src/index.ts
-
-# 或复制/链接到全局扩展目录（支持 /reload 热重载）
-#   ~/.pi/agent/extensions/pi-switch/  (Linux/macOS)
-#   %USERPROFILE%\.pi\agent\extensions\pi-switch\  (Windows)
-```
-
-## 配置
-
-配置目录：`~/.pi-switch/`（可用环境变量 `PI_SWITCH_CONFIG_DIR` 覆盖）
-
-```
-~/.pi-switch/
-├── providers.json   # Provider 列表（Phase 1/2 使用）
-├── accounts.json    # API Key 池（Phase 6）
-├── models.json      # 模型别名（Phase 3 使用）
-├── routing.json     # 路由策略（Phase 4）
-└── stats.json       # 使用统计（Phase 7）
-```
-
-示例配置见 [example/](example/)。
-
-### Provider 字段（providers.json）
-
-| 字段 | 说明 |
-|------|------|
-| `name` | Provider 显示名称（默认取 key） |
-| `type` | 协议简写：`openai` / `openai-responses` / `anthropic` / `gemini` |
-| `api` | 推荐显式填写：`openai-completions` / `openai-responses` / `anthropic-messages` / `google-generative-ai` |
-| `baseUrl` | 对应原生协议的 API 根地址 |
-| `enabled` | 是否启用（默认 true） |
-| `apiKey` | API Key 字面量、环境变量引用（`$ENV_VAR`）或 `!command` |
-| `headers` | 附加请求头 |
-| `authProvider` | 可选：委托给指定 pi Provider 解析 `/login`、OAuth 和动态 Header |
-| `models` | 静态模型定义（始终注册） |
-| `discoverModels` | 是否从 `GET {baseUrl}/models` 自动发现（OpenAI 兼容默认 true） |
-| `modelDefaults` | 发现/静态模型的默认元数据（contextWindow / maxTokens / reasoning / input / cost） |
-| `modelInclude` | 自动发现包含规则，支持 `*` / `?` glob |
-| `modelExclude` | 自动发现排除规则，支持 `*` / `?` glob |
-
-> **协议边界：** v0.3 alias 路由支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Google Generative AI。协议由 binding `api` 优先，其次 Provider `api`，最后由 `type` 推断。
-
-自动发现成功后会缓存到 `~/.pi-switch/cache/models/<provider>.json`；下次启动先加载缓存，网络发现失败也保留上次模型列表。
-
-OpenAI 兼容类型的 Provider 未显式配置 `apiKey` 时，默认按
-`$<PROVIDER_NAME>_API_KEY` 约定读取环境变量（如 `sub2api` → `$SUB2API_API_KEY`）。
-
-### 别名字段（models.json）
-
-| 字段 | 说明 |
-|------|------|
-| `displayName` | 人类可读名称（如 "GPT-5"） |
-| `providers` | 绑定列表：`{ id?, provider, model, api?, authProvider?, baseUrl?, headers?, compat?, thinkingLevelMap? }`；`id` 是稳定线路标识 |
-| `reasoning` / `input` / `contextWindow` / `maxTokens` | 模型元数据（可选；`input` 默认 `["text"]`，vision 写 `["text","image"]`） |
+| 问题 | 处理方式 |
+|---|---|
+| 启动时没有 pi-switch 加载信息 | 检查 `-e` 路径或扩展目录链接 |
+| 看不到 `pi-switch/<alias>` 模型 | 创建模型别名，并执行 `/config reload` |
+| 提示没有可用线路 | 用 `/switch check` 检查 Provider 引用、启用状态和 API Key |
+| 模型发现失败 | 检查 `baseUrl`；不支持 `/models` 时关闭自动发现并配置静态模型 |
+| 配置修改后没有生效 | 执行 `/config reload` 或在 pi 中执行 `/reload` |
+| 所有线路最终仍报错 | 执行 `/switch probe`，并检查各线路的认证和协议配置 |
 
 ## 开发与测试
 
 ```bash
-npm run typecheck   # tsc --noEmit
-npm run dev         # pi -e ./src/index.ts
-
-# 端到端测试（无需真实 API）：
-node test/mock-openai-server.mjs 6780        # 终端 1：mock OpenAI 兼容服务
-PI_SWITCH_CONFIG_DIR=/tmp/test pi -p "hi" --model pi-switch/gpt5 -e ./src/index.ts
+npm run typecheck
+npm test
+npm run check
 ```
+
+CI 会在 Ubuntu、Windows 和 macOS 上运行类型检查、测试及 npm 打包检查。
+
+## 参与贡献
+
+欢迎提交 Issue 和 Pull Request。建议在提交前运行：
+
+```bash
+npm run check
+```
+
+报告问题时，请提供：
+
+- 操作系统、Node.js 与 pi 版本
+- 使用的协议类型和路由策略
+- `/switch check` 或 `/switch probe` 输出
+- 已移除 API Key 等敏感信息的最小配置
 
 ## License
 
-MIT
+[MIT](LICENSE)
