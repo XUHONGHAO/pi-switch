@@ -1,0 +1,32 @@
+{
+  "name": "pi-switch",
+  "version": "0.3.2",
+  "description": "AI Agent Model Gateway & Provider Manager (pi extension)",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test",
+    "prepack": "npm run check",
+    "dev": "pi -e ./src/index.ts",
+    "link:ext": "powershell -ExecutionPolicy Bypass -File ./scripts/link-extension.ps1",
+    "unlink:ext": "powershell -ExecutionPolicy Bypass -File ./scripts/link-extension.ps1 -Unlink"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-tui": "^0.84.1",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.7"
+  }
+}

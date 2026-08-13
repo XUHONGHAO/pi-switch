@@ -1,0 +1,10 @@
+{
+  "coding": {
+    "provider": "pi-switch",
+    "model": "gpt5"
+  },
+  "creative": {
+    "provider": "pi-switch",
+    "model": "claude"
+  }
+}

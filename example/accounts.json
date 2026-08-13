@@ -1,0 +1,20 @@
+{
+  "gpt5_main": {
+    "provider": "sub2api",
+    "apiKey": "sk-xxxx",
+    "priority": 1,
+    "enabled": true
+  },
+  "gpt5_backup": {
+    "provider": "sub2api",
+    "apiKey": "sk-yyyy",
+    "priority": 2,
+    "enabled": true
+  },
+  "gpt5_disabled": {
+    "provider": "sub2api",
+    "apiKey": "sk-zzzz",
+    "priority": 0,
+    "enabled": false
+  }
+}

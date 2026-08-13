@@ -1,0 +1,13 @@
+# Keep repository text files consistent across Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# PowerShell scripts use Windows line endings.
+*.ps1 text eol=crlf
+
+# Preserve binary files.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary

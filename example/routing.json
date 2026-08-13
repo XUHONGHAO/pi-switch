@@ -1,0 +1,6 @@
+{
+  "strategy": "failover",
+  "failureThreshold": 3,
+  "cooldownMs": 30000,
+  "rateLimitCooldownMs": 60000
+}

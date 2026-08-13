@@ -1,0 +1,32 @@
+{
+  "gpt5": {
+    "displayName": "GPT-5",
+    "strategy": "failover",
+    "providers": [
+      { "id": "openai-official-gpt5", "provider": "openai_official", "model": "gpt-5", "api": "openai-responses", "priority": 1 },
+      { "provider": "sub2api", "model": "gpt-5", "api": "openai-completions", "priority": 2 }
+    ]
+  },
+  "claude": {
+    "displayName": "Claude Sonnet",
+    "reasoning": true,
+    "strategy": "failover",
+    "providers": [
+      {
+        "id": "anthropic-official-claude",
+        "provider": "anthropic_official",
+        "model": "claude-sonnet-4-5",
+        "api": "anthropic-messages",
+        "thinkingLevelMap": { "off": null, "low": "low", "medium": "medium", "high": "high", "xhigh": null, "max": null },
+        "priority": 1
+      },
+      { "provider": "sub2api", "model": "claude-sonnet-4-5", "api": "openai-completions", "priority": 2 }
+    ]
+  },
+  "gemini": {
+    "displayName": "Gemini Pro",
+    "providers": [
+      { "provider": "gemini_official", "model": "gemini-2.5-pro", "api": "google-generative-ai" }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build and test output
+dist/
+coverage/
+*.tgz
+*.log
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local pi configuration
+.pi/
+.pi-switch/
+
+# Editor and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
