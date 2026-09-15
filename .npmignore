@@ -2,5 +2,9 @@ node_modules/
 *.log
 *.tgz
 coverage/
+docs/
+tests/
+examples/
+AGENTS.md
 .pi/
 .pi-switch/

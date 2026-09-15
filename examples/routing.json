@@ -1,0 +1,11 @@
+{
+  "strategy": "failover",
+  "balanceScope": "session",
+  "failureCostPolicy": "balanced",
+  "maxAttempts": 2,
+  "maxHighCostFailovers": 1,
+  "failoverOnUnknown": false,
+  "failureThreshold": 3,
+  "cooldownMs": 30000,
+  "rateLimitCooldownMs": 60000
+}

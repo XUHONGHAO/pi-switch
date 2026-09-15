@@ -16,9 +16,6 @@ coverage/
 .pi/
 .pi-switch/
 
-# Local development documentation (not published)
-dev-docs/
-
 # Editor and operating system
 .vscode/
 .idea/

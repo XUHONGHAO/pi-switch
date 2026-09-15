@@ -67,7 +67,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "./config/store";
 import { bindSetModel } from "./preset/preset";
-import { AliasProvider, ALIAS_PROVIDER, type AliasRegistration } from "./provider/alias";
+import {
+  AliasProvider,
+  ALIAS_PROVIDER,
+  type AliasRegistration,
+  type ContextUsageSnapshot,
+} from "./provider/alias";
 import { ProviderManager, type RegisteredProvider } from "./provider/manager";
 import { StatsManager } from "./stats/manager";
 import { registerConfigCommand } from "./ui/config";
@@ -101,6 +106,9 @@ export default async function piSwitch(pi: ExtensionAPI): Promise<void> {
     ]);
     providers = nextProviders;
     aliasRegistration = nextAliases;
+    if (activeContext && currentSessionId) {
+      aliasProvider.restoreSessionAffinity(currentSessionId, activeContext.sessionManager.getBranch());
+    }
     switchCommand.reload();
   }
 
@@ -127,6 +135,7 @@ export default async function piSwitch(pi: ExtensionAPI): Promise<void> {
   // session_start also fires after /reload and session switches, so the
   // message doubles as a live confirmation that the extension is active.
   let activeContext: ExtensionContext | undefined;
+  let currentSessionId: string | undefined;
   const updateStatus = () => {
     if (!activeContext?.hasUI) return;
     const route = aliasProvider.lastRouteInfo();
@@ -138,7 +147,9 @@ export default async function piSwitch(pi: ExtensionAPI): Promise<void> {
 
   pi.on("session_start", async (_event, ctx) => {
     activeContext = ctx;
+    currentSessionId = ctx.sessionManager.getSessionId();
     aliasProvider.bindModelRegistry(ctx.modelRegistry);
+    aliasProvider.restoreSessionAffinity(currentSessionId, ctx.sessionManager.getBranch());
     updateStatus();
     ctx.ui.notify(
       `pi-switch loaded v${VERSION} · ${providers.length} provider(s)${aliasRegistration ? `, ${aliasRegistration.modelCount} alias(es)` : ""}`,
@@ -149,8 +160,13 @@ export default async function piSwitch(pi: ExtensionAPI): Promise<void> {
   // Persist pending stats on shutdown / reload / session switch.
   pi.on("session_shutdown", () => {
     activeContext?.ui.setStatus("pi-switch", undefined);
-    activeContext = undefined;
     stats.flush();
+    // Clear session affinity (Phase A).
+    if (aliasProvider && currentSessionId) {
+      aliasProvider.clearSession(currentSessionId);
+    }
+    activeContext = undefined;
+    currentSessionId = undefined;
   });
 
   // ---- Phase 7: agent-level request stats ----------------------------------
@@ -161,7 +177,16 @@ export default async function piSwitch(pi: ExtensionAPI): Promise<void> {
   let agentAlias: string | undefined;
   pi.on("agent_start", (_event, ctx) => {
     agentAlias = ctx.model?.provider === ALIAS_PROVIDER ? ctx.model.id : undefined;
-    aliasProvider.beginTurn();
+    const usage = ctx.getContextUsage();
+    const contextUsage: ContextUsageSnapshot = usage
+      ? {
+          ...(usage.tokens !== null ? { tokens: usage.tokens } : {}),
+          ...(usage.percent !== null ? { percent: usage.percent } : {}),
+          contextWindow: usage.contextWindow,
+          reliable: usage.tokens !== null,
+        }
+      : { reliable: false };
+    aliasProvider.beginTurn(contextUsage);
   });
   pi.on("agent_settled", () => {
     updateStatus();

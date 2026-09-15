@@ -8,15 +8,22 @@
  *
  *   priority: always the highest-priority binding (no failover)
  *   failover: try bindings in priority order, move to the next on failure
- *   balance:  round-robin across bindings, move to the next on failure
+ *   balance:  distribute sessions across bindings (session-scoped by default),
+ *             or rotate per-request (legacy "request" scope)
  *
  * Strategy resolution order: alias-level (`models.json` `strategy`)
  * -> global (`routing.json` `strategy`) -> "priority".
+ *
+ * Session affinity (Phase A):
+ *   Maintains in-memory affinity map: sessionId + alias -> binding.
+ *   After a successful first response, the session sticks to that binding.
+ *   New sessions participate in initial selection (rendezvous hash for balance).
  */
 
 import type { RoutingStrategy } from "../config/loader";
 import type { ConfigStore } from "../config/store";
 import type { ResolvedBinding } from "../model/resolver";
+import { createHash } from "node:crypto";
 
 /** Router decision for one request. */
 export interface Selection {
@@ -28,11 +35,15 @@ export interface Selection {
   attempts: ResolvedBinding[];
   /** Whether failover to the next candidate is allowed on failure. */
   canFailover: boolean;
+  /** Whether the first binding came from an existing session affinity entry. */
+  affinityHit: boolean;
 }
 
 export class Router {
-  /** Per-alias round-robin counters. */
+  /** Per-alias round-robin counters (legacy request-scoped balance). */
   private readonly counters = new Map<string, number>();
+  /** Session affinity map: "sessionId:alias" -> binding identity. */
+  private readonly affinity = new Map<string, string>();
 
   constructor(private readonly store: ConfigStore) {}
 
@@ -46,11 +57,90 @@ export class Router {
     return this.store.get().models[alias]?.strategy ?? this.defaultStrategy();
   }
 
+  /** Balance scope: session-sticky (default) or per-request rotation. */
+  balanceScope(): "session" | "request" {
+    return this.store.get().routing.balanceScope ?? "session";
+  }
+
+  /**
+   * Compute a stable affinity key for a session + alias.
+   * Uses binding identity (provider:model:baseUrl) to survive config reloads.
+   */
+  private affinityKey(sessionId: string, alias: string): string {
+    return `${sessionId}:${alias}`;
+  }
+
+  /** Stable identity shared with health and attempt statistics. */
+  private bindingIdentity(binding: ResolvedBinding): string {
+    return binding.lineId || `${binding.provider}|${binding.api}|${binding.baseUrl}|${binding.model}`;
+  }
+
+  /**
+   * Rendezvous (highest random weight) hashing: deterministic session -> binding.
+   * Returns the binding with the highest hash(sessionId + alias + bindingId).
+   */
+  private rendezvousHash(sessionId: string, alias: string, candidates: ResolvedBinding[]): ResolvedBinding {
+    let best: ResolvedBinding | null = null;
+    let bestHash = "";
+    for (const binding of candidates) {
+      const identity = this.bindingIdentity(binding);
+      const hash = createHash("sha256").update(`${sessionId}:${alias}:${identity}`).digest("hex");
+      if (best === null || hash > bestHash) {
+        best = binding;
+        bestHash = hash;
+      }
+    }
+    return best!;
+  }
+
+  /**
+   * Check if this session has affinity to a specific binding.
+   * Returns the bound binding if found in candidates, otherwise undefined.
+   */
+  getAffinity(sessionId: string | undefined, alias: string, candidates: ResolvedBinding[]): ResolvedBinding | undefined {
+    if (!sessionId) return undefined;
+    const key = this.affinityKey(sessionId, alias);
+    const identity = this.affinity.get(key);
+    if (!identity) return undefined;
+    return candidates.find((b) => this.bindingIdentity(b) === identity);
+  }
+
+  /**
+   * Record affinity after a successful first response.
+   * Should be called once the content is committed (not on transient failures).
+   */
+  setAffinity(sessionId: string | undefined, alias: string, binding: ResolvedBinding): boolean {
+    if (!sessionId) return false;
+    const key = this.affinityKey(sessionId, alias);
+    const identity = this.bindingIdentity(binding);
+    if (this.affinity.get(key) === identity) return false;
+    this.affinity.set(key, identity);
+    return true;
+  }
+
+  /** Restore a persisted affinity entry for a resumed session. */
+  restoreAffinity(sessionId: string, alias: string, lineId: string): void {
+    this.affinity.set(this.affinityKey(sessionId, alias), lineId);
+  }
+
+  /**
+   * Clear affinity for a specific session (called on session_shutdown).
+   */
+  clearSession(sessionId: string): void {
+    for (const key of this.affinity.keys()) {
+      if (key.startsWith(`${sessionId}:`)) {
+        this.affinity.delete(key);
+      }
+    }
+  }
+
   /**
    * Select a binding for `alias`.
    * `bindings` must be non-empty (callers resolve and validate first).
+   * `sessionId` enables session affinity: if the session already has a binding,
+   * return it directly (if still available); otherwise perform initial selection.
    */
-  select(alias: string, bindings: ResolvedBinding[]): Selection {
+  select(alias: string, bindings: ResolvedBinding[], sessionId?: string): Selection {
     const strategy = this.strategyFor(alias);
 
     // Lower priority value wins; stable sort keeps declaration order for ties.
@@ -60,21 +150,54 @@ export class Router {
       (a, b) => (a.priority ?? 0) - (b.priority ?? 0) || (a.accountPriority ?? 0) - (b.accountPriority ?? 0),
     );
 
+    // Check session affinity (only for session-scoped balance and failover).
+    const scope = this.balanceScope();
+    const useAffinity = strategy === "failover" || (strategy === "balance" && scope === "session");
+    if (useAffinity) {
+      const affinity = this.getAffinity(sessionId, alias, attempts);
+      if (affinity) {
+        // Move the affine binding to the front; failover continues from there.
+        const filtered = [affinity, ...attempts.filter((b) => b !== affinity)];
+        return {
+          binding: affinity,
+          strategy,
+          attempts: filtered,
+          canFailover: strategy === "failover" || strategy === "balance",
+          affinityHit: true,
+        };
+      }
+    }
+
+    // Initial selection: no affinity yet.
     if (strategy === "balance" && attempts.length > 1) {
-      const counter = this.counters.get(alias) ?? 0;
-      const start = counter % attempts.length;
-      // Rotate so the chosen binding leads; failover continues the rotation.
-      const rotated = [...attempts.slice(start), ...attempts.slice(0, start)];
-      this.counters.set(alias, counter + 1);
-      return { binding: rotated[0], strategy, attempts: rotated, canFailover: true };
+      if (scope === "session" && sessionId) {
+        // Session-scoped balance: rendezvous hash (deterministic).
+        const chosen = this.rendezvousHash(sessionId, alias, attempts);
+        const rotated = [chosen, ...attempts.filter((b) => b !== chosen)];
+        return { binding: chosen, strategy, attempts: rotated, canFailover: true, affinityHit: false };
+      } else {
+        // Request-scoped balance: round-robin (legacy behavior).
+        const counter = this.counters.get(alias) ?? 0;
+        const start = counter % attempts.length;
+        const rotated = [...attempts.slice(start), ...attempts.slice(0, start)];
+        this.counters.set(alias, counter + 1);
+        return { binding: rotated[0], strategy, attempts: rotated, canFailover: true, affinityHit: false };
+      }
     }
 
     // priority / failover both start at the first candidate.
-    return { binding: attempts[0], strategy, attempts, canFailover: strategy === "failover" };
+    return {
+      binding: attempts[0],
+      strategy,
+      attempts,
+      canFailover: strategy === "failover",
+      affinityHit: false,
+    };
   }
 
-  /** Reset round-robin state (e.g. on config reload). */
+  /** Reset round-robin state and affinity (e.g. on config reload). */
   reset(): void {
     this.counters.clear();
+    this.affinity.clear();
   }
 }

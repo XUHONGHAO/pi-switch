@@ -1,8 +1,11 @@
 # pi-switch 项目评审与优化路线图
 
+> 状态：历史评审快照（其中多项建议已在 v0.3.2 前完成）
 > 评审对象：pi-switch v0.1.0
 > 评审日期：2026-08-11
 > 项目定位：pi agent 的模型别名、Provider 管理、多账号与智能路由扩展
+>
+> 当前行为以 [`../requirements/product-scope.md`](../requirements/product-scope.md) 和 [`../architecture/overview.md`](../architecture/overview.md) 为准。
 
 ---
 
@@ -761,7 +764,7 @@ openai-official → sub2api（429）
 
 ### 10.1 增加自动化测试
 
-当前 `test/mock-openai-server.mjs` 适合手工 E2E，但不足以作为回归保障。
+评审时的 `test/mock-openai-server.mjs`（现为 `tests/mock-openai-server.mjs`）适合手工 E2E，但不足以作为回归保障。
 
 #### 单元测试
 

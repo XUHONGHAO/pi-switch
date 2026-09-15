@@ -1,7 +1,9 @@
 /** Request and upstream-attempt statistics with multi-process-safe persistence. */
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Usage } from "@earendil-works/pi-ai";
 import type { ErrorCategory } from "../errors/classify";
+import type { FailureAction, FailureDecision, FailureScope, AttemptPhase, CostRisk } from "../errors/decision";
 import { replaceFile } from "../utils/atomic-file";
 
 export interface LineStats {
@@ -22,9 +24,32 @@ export interface AttemptStats {
   totalTtftMs: number;
   ttftSamples: number;
   totalDurationMs: number;
+  contextSamples: number;
+  contextPercentSamples: number;
+  contextUnknown: number;
+  totalContextTokens: number;
+  totalContextPercent: number;
+  affinityHits: number;
+  usageSamples: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalCost: number;
   lastAttemptAt?: number;
   lastError?: string;
   lastCategory?: ErrorCategory;
+  lastPhase?: AttemptPhase;
+  lastFailureScope?: FailureScope;
+  lastAction?: FailureAction;
+  lastCostRisk?: CostRisk;
+  lastReasonCode?: string;
+  lastAttemptNumber?: number;
+  lastMaxAttempts?: number;
+  lastBudgetRemaining?: number;
+  lastHighCostFailoversUsed?: number;
+  lastContextTokens?: number;
+  lastContextPercent?: number;
 }
 
 export interface StatsData {
@@ -55,6 +80,17 @@ export interface AttemptEntry {
   durationMs: number;
   category?: ErrorCategory;
   error?: string;
+  contextTokens?: number;
+  contextPercent?: number;
+  contextUsageReliable?: boolean;
+  affinityHit?: boolean;
+  usage?: Usage;
+  phase?: AttemptPhase;
+  decision?: FailureDecision;
+  attemptNumber?: number;
+  maxAttempts?: number;
+  budgetRemaining?: number;
+  highCostFailoversUsed?: number;
 }
 
 const FLUSH_DELAY_MS = 2000;
@@ -64,7 +100,53 @@ function emptyLine(): LineStats {
   return { requests: 0, successes: 0, failures: 0, failovers: 0, totalLatencyMs: 0 };
 }
 function emptyAttempt(): AttemptStats {
-  return { attempts: 0, successes: 0, failures: 0, totalTtftMs: 0, ttftSamples: 0, totalDurationMs: 0 };
+  return {
+    attempts: 0,
+    successes: 0,
+    failures: 0,
+    totalTtftMs: 0,
+    ttftSamples: 0,
+    totalDurationMs: 0,
+    contextSamples: 0,
+    contextPercentSamples: 0,
+    contextUnknown: 0,
+    totalContextTokens: 0,
+    totalContextPercent: 0,
+    affinityHits: 0,
+    usageSamples: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalCost: 0,
+  };
+}
+
+function normalizeAttempt(value: Partial<AttemptStats> | undefined): AttemptStats {
+  const empty = emptyAttempt();
+  if (!value) return empty;
+  return {
+    ...empty,
+    ...value,
+    attempts: value.attempts ?? 0,
+    successes: value.successes ?? 0,
+    failures: value.failures ?? 0,
+    totalTtftMs: value.totalTtftMs ?? 0,
+    ttftSamples: value.ttftSamples ?? 0,
+    totalDurationMs: value.totalDurationMs ?? 0,
+    contextSamples: value.contextSamples ?? 0,
+    contextPercentSamples: value.contextPercentSamples ?? 0,
+    contextUnknown: value.contextUnknown ?? 0,
+    totalContextTokens: value.totalContextTokens ?? 0,
+    totalContextPercent: value.totalContextPercent ?? 0,
+    affinityHits: value.affinityHits ?? 0,
+    usageSamples: value.usageSamples ?? 0,
+    inputTokens: value.inputTokens ?? 0,
+    outputTokens: value.outputTokens ?? 0,
+    cacheReadTokens: value.cacheReadTokens ?? 0,
+    cacheWriteTokens: value.cacheWriteTokens ?? 0,
+    totalCost: value.totalCost ?? 0,
+  };
 }
 function emptyData(): StatsData {
   return { byAlias: {}, byProvider: {}, byAccount: {}, attemptsByLine: {} };
@@ -91,9 +173,12 @@ export class StatsManager {
     try {
       if (!existsSync(this.statsPath())) return emptyData();
       const raw = JSON.parse(readFileSync(this.statsPath(), "utf-8")) as Partial<StatsData>;
+      const attemptsByLine = Object.fromEntries(
+        Object.entries(raw.attemptsByLine ?? {}).map(([key, value]) => [key, normalizeAttempt(value)]),
+      );
       return {
         byAlias: raw.byAlias ?? {}, byProvider: raw.byProvider ?? {}, byAccount: raw.byAccount ?? {},
-        attemptsByLine: raw.attemptsByLine ?? {},
+        attemptsByLine,
         ...(typeof raw.updatedAt === "number" ? { updatedAt: raw.updatedAt } : {}),
       };
     } catch (err) {
@@ -117,7 +202,7 @@ export class StatsManager {
     const now = Date.now();
     const key = attemptKey(entry);
     for (const target of [this.data, this.pending]) {
-      const stats = (target.attemptsByLine[key] ??= emptyAttempt());
+      const stats = (target.attemptsByLine[key] = normalizeAttempt(target.attemptsByLine[key]));
       stats.attempts += 1;
       entry.success ? stats.successes += 1 : stats.failures += 1;
       if (entry.ttftMs !== undefined) { stats.totalTtftMs += entry.ttftMs; stats.ttftSamples += 1; }
@@ -125,6 +210,40 @@ export class StatsManager {
       stats.lastAttemptAt = now;
       if (entry.error) stats.lastError = entry.error;
       if (entry.category) stats.lastCategory = entry.category;
+      if (entry.phase) stats.lastPhase = entry.phase;
+      if (entry.decision) {
+        stats.lastFailureScope = entry.decision.scope;
+        stats.lastAction = entry.decision.action;
+        stats.lastCostRisk = entry.decision.costRisk;
+        stats.lastReasonCode = entry.decision.reasonCode;
+      }
+      if (entry.attemptNumber !== undefined) stats.lastAttemptNumber = entry.attemptNumber;
+      if (entry.maxAttempts !== undefined) stats.lastMaxAttempts = entry.maxAttempts;
+      if (entry.budgetRemaining !== undefined) stats.lastBudgetRemaining = entry.budgetRemaining;
+      if (entry.highCostFailoversUsed !== undefined) stats.lastHighCostFailoversUsed = entry.highCostFailoversUsed;
+      if (entry.contextUsageReliable !== undefined) {
+        if (entry.contextUsageReliable && entry.contextTokens !== undefined) {
+          stats.contextSamples += 1;
+          stats.totalContextTokens += entry.contextTokens;
+          stats.lastContextTokens = entry.contextTokens;
+          if (entry.contextPercent !== undefined) {
+            stats.contextPercentSamples += 1;
+            stats.totalContextPercent += entry.contextPercent;
+            stats.lastContextPercent = entry.contextPercent;
+          }
+        } else {
+          stats.contextUnknown += 1;
+        }
+      }
+      if (entry.affinityHit) stats.affinityHits += 1;
+      if (entry.usage) {
+        stats.usageSamples += 1;
+        stats.inputTokens += entry.usage.input;
+        stats.outputTokens += entry.usage.output;
+        stats.cacheReadTokens += entry.usage.cacheRead;
+        stats.cacheWriteTokens += entry.usage.cacheWrite;
+        stats.totalCost += entry.usage.cost.total;
+      }
       target.updatedAt = now;
     }
     this.markDirty();
@@ -194,7 +313,9 @@ export class StatsManager {
   }
 
   alias(alias: string): LineStats | undefined { return this.data.byAlias[alias]; }
-  lineAttempts(line: string): AttemptStats | undefined { return this.data.attemptsByLine[line]; }
+  lineAttempts(line: string, account?: string): AttemptStats | undefined {
+    return this.data.attemptsByLine[attemptKey({ lineId: line, provider: line, account })];
+  }
   attemptSummary(): Array<{ line: string; stats: AttemptStats }> {
     return Object.entries(this.data.attemptsByLine).map(([line, stats]) => ({ line, stats })).sort((a, b) => b.stats.attempts - a.stats.attempts);
   }
@@ -215,17 +336,48 @@ function mergeLine(target: Record<string, LineStats>, delta: Record<string, Line
 }
 function mergeAttempt(target: Record<string, AttemptStats>, delta: Record<string, AttemptStats>): void {
   for (const [key, add] of Object.entries(delta)) {
-    const out = (target[key] ??= emptyAttempt());
-    out.attempts += add.attempts; out.successes += add.successes; out.failures += add.failures;
-    out.totalTtftMs += add.totalTtftMs; out.ttftSamples += add.ttftSamples; out.totalDurationMs += add.totalDurationMs;
-    if ((add.lastAttemptAt ?? 0) >= (out.lastAttemptAt ?? 0)) {
-      out.lastAttemptAt = add.lastAttemptAt; out.lastError = add.lastError; out.lastCategory = add.lastCategory;
+    const out = (target[key] = normalizeAttempt(target[key]));
+    const normalizedAdd = normalizeAttempt(add);
+    out.attempts += normalizedAdd.attempts; out.successes += normalizedAdd.successes; out.failures += normalizedAdd.failures;
+    out.totalTtftMs += normalizedAdd.totalTtftMs;
+    out.ttftSamples += normalizedAdd.ttftSamples;
+    out.totalDurationMs += normalizedAdd.totalDurationMs;
+    out.contextSamples += normalizedAdd.contextSamples;
+    out.contextPercentSamples += normalizedAdd.contextPercentSamples;
+    out.contextUnknown += normalizedAdd.contextUnknown;
+    out.totalContextTokens += normalizedAdd.totalContextTokens;
+    out.totalContextPercent += normalizedAdd.totalContextPercent;
+    out.affinityHits += normalizedAdd.affinityHits;
+    out.usageSamples += normalizedAdd.usageSamples;
+    out.inputTokens += normalizedAdd.inputTokens;
+    out.outputTokens += normalizedAdd.outputTokens;
+    out.cacheReadTokens += normalizedAdd.cacheReadTokens;
+    out.cacheWriteTokens += normalizedAdd.cacheWriteTokens;
+    out.totalCost += normalizedAdd.totalCost;
+    if ((normalizedAdd.lastAttemptAt ?? 0) >= (out.lastAttemptAt ?? 0)) {
+      out.lastAttemptAt = normalizedAdd.lastAttemptAt;
+      out.lastError = normalizedAdd.lastError;
+      out.lastCategory = normalizedAdd.lastCategory;
+      out.lastPhase = normalizedAdd.lastPhase;
+      out.lastFailureScope = normalizedAdd.lastFailureScope;
+      out.lastAction = normalizedAdd.lastAction;
+      out.lastCostRisk = normalizedAdd.lastCostRisk;
+      out.lastReasonCode = normalizedAdd.lastReasonCode;
+      out.lastAttemptNumber = normalizedAdd.lastAttemptNumber;
+      out.lastMaxAttempts = normalizedAdd.lastMaxAttempts;
+      out.lastBudgetRemaining = normalizedAdd.lastBudgetRemaining;
+      out.lastHighCostFailoversUsed = normalizedAdd.lastHighCostFailoversUsed;
+      out.lastContextTokens = normalizedAdd.lastContextTokens;
+      out.lastContextPercent = normalizedAdd.lastContextPercent;
     }
   }
 }
 export function mergeStats(base: StatsData, delta: StatsData): StatsData {
   const result: StatsData = JSON.parse(JSON.stringify(base));
   result.byAlias ??= {}; result.byProvider ??= {}; result.byAccount ??= {}; result.attemptsByLine ??= {};
+  for (const [key, stats] of Object.entries(result.attemptsByLine)) {
+    result.attemptsByLine[key] = normalizeAttempt(stats);
+  }
   mergeLine(result.byAlias, delta.byAlias); mergeLine(result.byProvider, delta.byProvider); mergeLine(result.byAccount, delta.byAccount);
   mergeAttempt(result.attemptsByLine, delta.attemptsByLine);
   result.updatedAt = Math.max(base.updatedAt ?? 0, delta.updatedAt ?? 0) || undefined;
@@ -237,4 +389,20 @@ export function formatStats(stats: LineStats | undefined): string {
   const successRate = Math.round((stats.successes / stats.requests) * 100);
   const avgLatency = Math.round(stats.totalLatencyMs / stats.requests);
   return `${stats.requests} 次请求 · 成功率 ${successRate}% · 平均延迟 ${avgLatency}ms${stats.failovers ? ` · ${stats.failovers} 次故障切换` : ""}`;
+}
+
+export function formatAttemptUsage(stats: AttemptStats | undefined): string {
+  if (!stats || stats.attempts === 0) return "暂无成本观测";
+  const context = stats.lastContextTokens !== undefined
+    ? `上下文 ${formatTokens(stats.lastContextTokens)}${stats.lastContextPercent !== undefined ? ` (${Math.round(stats.lastContextPercent)}%)` : ""}`
+    : "上下文未知";
+  const cacheBase = stats.inputTokens + stats.cacheReadTokens;
+  const cacheRate = cacheBase > 0 ? ` · 缓存读取占比 ${Math.round((stats.cacheReadTokens / cacheBase) * 100)}%` : "";
+  return `${context} · 读缓存 ${formatTokens(stats.cacheReadTokens)} · 写缓存 ${formatTokens(stats.cacheWriteTokens)}${cacheRate} · 费用 $${stats.totalCost.toFixed(4)} · 亲和命中 ${stats.affinityHits}/${stats.attempts}`;
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
 }

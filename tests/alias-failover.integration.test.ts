@@ -93,4 +93,34 @@ describe("AliasProvider streaming failover", () => {
     expect(stats.attemptSummary().find(({ line }) => line.startsWith("second|"))?.stats)
       .toMatchObject({ attempts: 1, successes: 1 });
   });
+
+  it("honors maxAttempts and stops before using a fallback", async () => {
+    const failed = await listen("fail");
+    const successful = await listen("success");
+    const dir = mkdtempSync(join(tmpdir(), "pi-switch-budget-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    writeConfig(dir, failed.baseUrl, successful.baseUrl);
+    writeFileSync(join(dir, "routing.json"), JSON.stringify({ maxAttempts: 1 }));
+
+    let providerConfig: any;
+    const pi = {
+      registerProvider: (_name: string, config: unknown) => { providerConfig = config; },
+      unregisterProvider: () => {},
+    } as any;
+    const stats = new StatsManager(dir);
+    const aliasProvider = new AliasProvider(pi, new ConfigStore(dir), stats);
+    aliasProvider.beginTurn();
+    aliasProvider.register();
+    const model = {
+      id: "gpt", name: "gpt", provider: "pi-switch", api: "openai-completions",
+      baseUrl: "http://pi-switch.local/v1", reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 1000,
+    } as any;
+    const stream = providerConfig.streamSimple(model, { messages: [{ role: "user", content: "hello", timestamp: Date.now() }] }, { apiKey: "local" });
+    const events: any[] = [];
+    for await (const event of stream) events.push(event);
+    expect(events.filter((event) => event.type === "error")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "text_delta").map((event) => event.delta).join("")).not.toContain("fallback ok");
+    expect(aliasProvider.lastRouteInfo()).toMatchObject({ provider: "first", ok: false, failovers: 0, decision: { reasonCode: "attempt-budget-exhausted" } });
+  });
 });

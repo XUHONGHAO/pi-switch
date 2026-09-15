@@ -16,7 +16,7 @@ import { ModelResolver } from "../model/resolver";
 import { handlePresetCommand, setCurrentModel } from "../preset/preset";
 import type { AliasProvider } from "../provider/alias";
 import { probeProvider } from "../provider/probe";
-import { formatStats, StatsManager } from "../stats/manager";
+import { formatAttemptUsage, formatStats, StatsManager } from "../stats/manager";
 import { showModelSelector, toSelectorItems } from "./selector";
 
 /** Handle returned so /config can rebuild picker state after a reload. */
@@ -111,14 +111,15 @@ async function showStatus(
   const account = route?.account ?? "-";
   const latency = route?.latency !== undefined ? `${route.latency}ms（首字延迟）` : "-";
   const statsLine = model ? formatStats(stats.alias(model.id)) : "-";
+  const usageLine = route ? formatAttemptUsage(stats.lineAttempts(route.lineId, route.account)) : "暂无成本观测";
   const health = aliasProvider.healthSummary();
   const healthLine = `熔断中: ${health.open}/${health.total}`;
 
   console.log(
-    `[pi-switch] status: model=${modelLabel} provider=${provider} account=${account} latency=${latency} health=${healthLine} stats=${statsLine}`,
+    `[pi-switch] status: model=${modelLabel} provider=${provider} account=${account} latency=${latency} health=${healthLine} stats=${statsLine} usage=${usageLine}`,
   );
   ctx.ui.notify(
-    `模型: ${modelLabel} · Provider: ${provider} · 账号: ${account} · 延迟: ${latency} · ${healthLine} · ${statsLine}`,
+    `模型: ${modelLabel} · Provider: ${provider} · 账号: ${account} · 延迟: ${latency} · ${healthLine} · ${statsLine} · ${usageLine}`,
     "info",
   );
 }

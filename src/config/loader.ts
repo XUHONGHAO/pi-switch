@@ -161,10 +161,23 @@ export interface ModelAliasConfig {
 /** Routing strategies supported by routing.json. */
 export type RoutingStrategy = "priority" | "failover" | "balance";
 
+/** Balance scope: per-session (sticky) or per-request (round-robin). */
+export type BalanceScope = "session" | "request";
+export type FailureCostPolicy = "availability" | "balanced" | "economy";
+
 /** Routing configuration from routing.json. */
 export interface RoutingConfig {
   /** Default routing strategy. */
   strategy?: RoutingStrategy;
+  /**
+   * Balance scope: "session" (default) assigns one binding per session and sticks to it,
+   * optimizing cache hit rates; "request" rotates per-request (legacy behavior).
+   */
+  balanceScope?: BalanceScope;
+  failureCostPolicy?: FailureCostPolicy;
+  maxAttempts?: number;
+  maxHighCostFailovers?: number;
+  failoverOnUnknown?: boolean;
   /** Consecutive transient failures before opening a circuit. */
   failureThreshold?: number;
   /** Circuit cooldown after transient failures. */

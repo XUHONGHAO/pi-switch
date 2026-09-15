@@ -23,19 +23,20 @@ pi-switch/gpt5
 
 ## 功能特性
 
-- **统一模型别名**：一个名称聚合不同 Provider、endpoint、协议和真实模型 ID
+- **统一模型别名**：一个名称聚合不同 Provider、endpoint、协议和模型 ID
 - **三种路由策略**：
   - `priority`：仅使用最高优先级线路
-  - `failover`：失败时按优先级自动切换
-  - `balance`：在线路之间轮询
+  - `failover`：失败时按优先级自动切换，会话粘性避免抖动，并在恢复会话时保留线路
+  - `balance`：会话级负载均衡（默认），可选逐请求轮询
 - **原生多协议转发**：支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Google Generative AI
+- **思考深度支持**：通过 TUI 配置 `thinkingLevelMap`，支持使用 `Shift+Tab` 切换思考级别
 - **多账号 Key 池**：同一 Provider 可配置多个 API Key，并按优先级选择或故障切换
 - **Circuit Breaker**：连续失败后暂时跳过异常线路，并识别 `429` 与 `Retry-After`
 - **中文 TUI 配置**：通过 `/config` 管理 Provider、模型别名、账号和路由，无需手写 JSON
 - **热重载**：配置保存后立即重新注册模型，无需重启 pi
 - **模型发现与缓存**：支持 `/models` 自动发现、glob 过滤和离线缓存
 - **认证复用**：可复用 pi 的 `/login`、OAuth、环境变量、动态 Header 与 `!command`
-- **请求统计与诊断**：记录成功率、延迟和 failover，并提供静态检查与主动探测
+- **请求统计与诊断**：记录成功率、延迟、failover、上下文用量、缓存读写和费用，并提供静态检查与主动探测
 - **安全配置**：界面中 API Key 打码，配置保存前执行结构和字段校验
 
 ## 环境要求
@@ -171,7 +172,7 @@ pi -p "你好，请介绍一下自己" --model pi-switch/gpt5 -e ./src/index.ts
 |---|---|
 | `/switch` | 打开模型别名选择器 |
 | `/switch <alias>` | 直接切换到指定别名 |
-| `/switch status` | 查看当前模型、实际线路、账号、延迟和统计 |
+| `/switch status` | 查看当前模型、实际线路、账号、延迟，以及上下文、缓存读写、费用和亲和命中统计 |
 | `/switch providers` | 查看所有别名及其线路 |
 | `/switch check` | 检查配置引用、Key 池和 Circuit Breaker 状态 |
 | `/switch probe` | 主动探测 Provider 的模型接口和响应延迟 |
@@ -188,15 +189,34 @@ pi -p "你好，请介绍一下自己" --model pi-switch/gpt5 -e ./src/index.ts
 | `/config strategy <strategy>` | 设置全局路由策略 |
 | `/config reload` | 从磁盘重新加载配置 |
 
+### 思考深度配置
+
+pi-switch 支持为模型配置思考级别映射，让你可以使用 `Shift+Tab` 快捷键或 `/thinking` 命令切换思考模式。
+
+**快速配置：**
+
+1. 执行 `/config models`，选择要配置的模型别名
+2. 将“思考支持（reasoning）”设置为“是”
+3. 选择要配置的线路，然后选择“思考级别映射”
+4. 选择“使用标准映射（推荐）”
+5. 保存并重载
+
+**使用：**
+
+- 按 `Shift+Tab` 打开思考级别选择器
+- 或使用 `/thinking <level>` 命令（`off` / `low` / `medium` / `high`）
+
+详细配置说明见 [`docs/guides/thinking-support.md`](docs/guides/thinking-support.md)。
+
 ## 路由策略
 
 | 策略 | 行为 | 适用场景 |
 |---|---|---|
 | `priority` | 只使用优先级最高的可用线路，失败不切换 | 必须固定使用指定上游 |
-| `failover` | 在产生内容前失败时自动尝试下一条线路 | 优先保障可用性 |
-| `balance` | 按轮询方式分配请求，失败时继续尝试 | 多线路分摊请求 |
+| `failover` | 在产生内容前失败时自动尝试下一条线路，切换后会话粘住新线路 | 优先保障可用性 |
+| `balance` | 会话级负载均衡（默认 `balanceScope: "session"`），每个 pi 会话分配到一条线路并保持粘性，优化缓存命中率；可设为 `"request"` 恢复逐请求轮询 | 多线路分摊负载 |
 
-> 如果上游已经输出内容，pi-switch 不会再切换线路，以免把不同响应拼接在一起。
+> 如果上游已经输出内容，pi-switch 不会再切换线路，以免把不同响应拼接在一起。会话亲和在 `/new`、`/fork`、`/clone` 时重置，`/resume` 时恢复。
 
 ## 配置文件
 
@@ -211,7 +231,7 @@ pi -p "你好，请介绍一下自己" --model pi-switch/gpt5 -e ./src/index.ts
 └── stats.json       # 自动生成的请求统计
 ```
 
-可通过环境变量 `PI_SWITCH_CONFIG_DIR` 更改配置目录。完整示例见 [`example/`](example/)。
+可通过环境变量 `PI_SWITCH_CONFIG_DIR` 更改配置目录。完整示例见 [`examples/`](examples/)。
 
 虽然推荐使用 `/config`，也可以直接编辑 JSON，然后执行 `/config reload`。
 
@@ -294,11 +314,26 @@ pi -p "你好，请介绍一下自己" --model pi-switch/gpt5 -e ./src/index.ts
 ```json
 {
   "strategy": "failover",
+  "balanceScope": "session",
+  "failureCostPolicy": "balanced",
+  "maxAttempts": 2,
+  "maxHighCostFailovers": 1,
+  "failoverOnUnknown": false,
   "failureThreshold": 3,
   "cooldownMs": 30000,
   "rateLimitCooldownMs": 60000
 }
 ```
+
+- `strategy`: 默认路由策略（`priority` / `failover` / `balance`）
+- `balanceScope`: balance 作用域，`"session"`（默认，会话级粘性）或 `"request"`（逐请求轮询）
+- `failureCostPolicy`: 自动切换成本偏好：`availability`、`balanced`（默认）或 `economy`
+- `maxAttempts`: 单次请求最多尝试次数，默认 `2`
+- `maxHighCostFailovers`: balanced 策略下高成本切换上限，默认 `1`
+- `failoverOnUnknown`: 是否允许未知风险错误自动切换，默认 `false`
+- `failureThreshold`: 连续失败多少次后熔断线路
+- `cooldownMs`: 熔断冷却时间（毫秒）
+- `rateLimitCooldownMs`: 429 限流时的默认冷却时间
 
 ## API Key 与 Secret
 
@@ -310,7 +345,7 @@ $OPENAI_API_KEY           # 环境变量，推荐
 !secret-tool get api-key  # 请求时执行命令
 ```
 
-请勿将真实 API Key 写入仓库。项目中的 [`example/`](example/) 只包含占位符和环境变量引用。
+请勿将真实 API Key 写入仓库。项目中的 [`examples/`](examples/) 只包含占位符和环境变量引用。
 
 ## Preset 集成
 
@@ -345,6 +380,8 @@ $OPENAI_API_KEY           # 环境变量，推荐
 | 所有线路最终仍报错 | 执行 `/switch probe`，并检查各线路的认证和协议配置 |
 
 ## 开发与测试
+
+开发约定与文档索引见 [`AGENTS.md`](AGENTS.md) 和 [`docs/README.md`](docs/README.md)，完整开发手册见 [`docs/development/handbook.md`](docs/development/handbook.md)。
 
 ```bash
 npm run typecheck

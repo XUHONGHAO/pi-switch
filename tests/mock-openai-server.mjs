@@ -5,7 +5,7 @@
  *   GET  /v1/models          -> model list (for discovery)
  *   POST /v1/chat/completions-> SSE streaming chat completion
  *
- * Usage: node test/mock-openai-server.mjs [port]
+ * Usage: node tests/mock-openai-server.mjs [port]
  */
 
 import { createServer } from "node:http";

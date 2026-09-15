@@ -1,4 +1,4 @@
-import type { PiSwitchConfig, RoutingStrategy } from "./loader";
+import type { FailureCostPolicy, PiSwitchConfig, RoutingStrategy, BalanceScope } from "./loader";
 import { inferApi, isSupportedApi } from "../provider/transport";
 
 export interface ValidationResult {
@@ -7,6 +7,8 @@ export interface ValidationResult {
 }
 
 const STRATEGIES = new Set<RoutingStrategy>(["priority", "failover", "balance"]);
+const BALANCE_SCOPES = new Set<BalanceScope>(["session", "request"]);
+const FAILURE_COST_POLICIES = new Set<FailureCostPolicy>(["availability", "balanced", "economy"]);
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const INPUT_MODALITIES = new Set(["text", "image"]);
 const COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite"] as const;
@@ -357,6 +359,21 @@ export function validateConfig(config: PiSwitchConfig): ValidationResult {
   } else {
     if (routing.strategy !== undefined && (typeof routing.strategy !== "string" || !STRATEGIES.has(routing.strategy as RoutingStrategy))) {
       errors.push("routing.json:strategy: expected priority, failover, or balance");
+    }
+    if (routing.balanceScope !== undefined && (typeof routing.balanceScope !== "string" || !BALANCE_SCOPES.has(routing.balanceScope as BalanceScope))) {
+      errors.push("routing.json:balanceScope: expected session or request");
+    }
+    if (routing.failureCostPolicy !== undefined && (typeof routing.failureCostPolicy !== "string" || !FAILURE_COST_POLICIES.has(routing.failureCostPolicy as FailureCostPolicy))) {
+      errors.push("routing.json:failureCostPolicy: expected availability, balanced, or economy");
+    }
+    for (const field of ["maxAttempts", "maxHighCostFailovers"] as const) {
+      const value = routing[field];
+      if (value !== undefined && !positiveSafeInteger(value)) {
+        errors.push(`routing.json:${field}: expected a positive safe integer`);
+      }
+    }
+    if (routing.failoverOnUnknown !== undefined && typeof routing.failoverOnUnknown !== "boolean") {
+      errors.push("routing.json:failoverOnUnknown: expected boolean");
     }
     if (routing.failureThreshold !== undefined && !positiveSafeInteger(routing.failureThreshold)) {
       errors.push("routing.json:failureThreshold: expected a positive safe integer");

@@ -277,7 +277,7 @@ pi> /switch status        # 查看当前线路与统计
 |------|------|
 | `id` | 可选稳定线路标识；Circuit Breaker 和 AttemptStats 使用它区分 binding |
 | `provider` | providers.json 中的 Provider key |
-| `model` | 发送给该 Provider 的真实模型 id |
+| `model` | 发送给该 Provider 的模型 ID |
 | `authProvider` | 可选，委托给指定 pi Provider 解析 `/login`、OAuth 和动态 Header |
 | `priority` | 路由优先级（越小越优先，默认按声明顺序） |
 | `api` | binding 协议覆盖，可让同一 alias 在不同线路使用不同协议 |
@@ -303,11 +303,19 @@ pi> /switch status        # 查看当前线路与统计
 ### 4.3 routing.json — 路由策略
 
 ```json
-{ "strategy": "failover" }
+{
+  "strategy": "failover",
+  "balanceScope": "session",
+  "failureCostPolicy": "balanced",
+  "maxAttempts": 2,
+  "maxHighCostFailovers": 1,
+  "failoverOnUnknown": false
+}
 ```
 
 取值：`priority`（默认）| `failover` | `balance`。
 解析优先级：models.json 别名级 `strategy` > routing.json 全局 `strategy` > 默认 `priority`。
+`failureCostPolicy` 可选 `availability`、`balanced`（默认）或 `economy`；`maxAttempts` 限制单次请求尝试次数，`maxHighCostFailovers` 限制高成本切换次数，`failoverOnUnknown` 控制未知风险错误是否切换。
 
 ### 4.4 accounts.json — 账号（Key 池）
 
@@ -525,7 +533,7 @@ npm run dev         # pi -e ./src/index.ts 开发模式
 
 ```bash
 # 终端 1：启动 mock（可选 MOCK_KEYS 指定合法 key，逗号分隔）
-MOCK_KEYS=sk-good node test/mock-openai-server.mjs 6780
+MOCK_KEYS=sk-good node tests/mock-openai-server.mjs 6780
 
 # 终端 2：配置指向 mock 后验证
 mkdir -p ~/.pi-switch-test
@@ -536,8 +544,8 @@ PI_SWITCH_CONFIG_DIR=~/.pi-switch-test pi -p "hi" --model pi-switch/gpt5 -e ./sr
 多服务器场景可同时起多个实例模拟多线路：
 
 ```bash
-MOCK_ID=server-a node test/mock-openai-server.mjs 6780
-MOCK_ID=server-b node test/mock-openai-server.mjs 6781
+MOCK_ID=server-a node tests/mock-openai-server.mjs 6780
+MOCK_ID=server-b node tests/mock-openai-server.mjs 6781
 ```
 
 ### 项目结构

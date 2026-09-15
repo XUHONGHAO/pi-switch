@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Cost-aware failover (Phase B/C first batch)**: records context usage, cache read/write, cost and affinity telemetry; adds structured failure decisions with `failureCostPolicy`, `maxAttempts`, `maxHighCostFailovers` and conservative unknown-error handling.
+- Session affinity is persisted as a pi Custom Entry using only a SHA-256 session id hash, so `/resume` restores the line without exposing the raw session id.
+- **Session affinity (Phase A)**: `balance` now defaults to session-scoped distribution using rendezvous hashing, keeping each pi session on the same binding for better cache hit rates. `failover` also sticks to the switched binding within the same session. Add `"balanceScope": "request"` to `routing.json` to restore legacy round-robin behavior.
+- Protocol-level regression tests pinning the pi-native passthrough contract: `options.sessionId`, `options.cacheRetention` and the routed model `compat` reach pi-ai transports intact, and pi's own session id is what aliases forward.
+
+### Changed
+
+- **Breaking (minor)**: `balance` strategy now distributes sessions rather than individual requests by default. This improves cache efficiency but changes observable load distribution. Use `"balanceScope": "request"` for the old behavior.
+
+### Documentation
+
+- Added `docs/architecture/pi-native-passthrough.md` describing which cache and session-affinity fields each pi-ai transport generates, and under which `compat` preconditions.
+
 ## 0.3.2 - 2026-08-13
 
 ### Fixed

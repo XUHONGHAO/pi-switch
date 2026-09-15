@@ -24,6 +24,7 @@ import type { ConfigStore, ConfigSection } from "../config/store";
 import type {
   AccountConfig,
   ModelAliasConfig,
+  ModelProviderBinding,
   PiSwitchConfig,
   ProviderConfig,
   RoutingStrategy,
@@ -161,6 +162,40 @@ async function editContextWindow(
   }
 }
 
+async function editThinkingLevelMap(
+  ctx: ExtensionCommandContext,
+  binding: ModelProviderBinding,
+): Promise<void> {
+  if (!ctx.hasUI) return;
+  
+  const choice = await askSelect(ctx, "思考级别映射配置", [
+    "使用标准映射（推荐）",
+    "清除映射",
+    "取消",
+  ]);
+  
+  if (!choice || choice === "取消") return;
+  
+  if (choice === "清除映射") {
+    delete binding.thinkingLevelMap;
+    ctx.ui.notify("已清除思考级别映射", "info");
+    return;
+  }
+  
+  if (choice === "使用标准映射（推荐）") {
+    binding.thinkingLevelMap = {
+      off: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+      max: "high",
+    };
+    ctx.ui.notify("已应用标准思考级别映射", "info");
+    return;
+  }
+}
+
 function sectionLabel(section: ConfigSection): string {
   return `${section}.json`;
 }
@@ -184,21 +219,26 @@ async function askProviderKey(
 
 async function mainMenu(ctx: ExtensionCommandContext, deps: ConfigCommandDeps): Promise<void> {
   if (!ctx.hasUI) return showHelp(ctx);
-  const choice = await askSelect(ctx, "pi-switch 配置", [
-    "Provider 管理",
-    "模型别名",
-    "账号（API Key 池）",
-    "路由策略",
-    "重载配置（reload）",
-    "帮助",
-  ]);
-  switch (choice) {
-    case "Provider 管理": return providersMenu(ctx, deps);
-    case "模型别名": return modelsMenu(ctx, deps);
-    case "账号（API Key 池）": return accountsMenu(ctx, deps);
-    case "路由策略": return strategyMenu(ctx, deps);
-    case "重载配置（reload）": return doReload(ctx, deps);
-    case "帮助": return showHelp(ctx);
+  // Keep the command alive while navigating. A child menu returning means
+  // "back to parent"; only cancelling this root selector exits /config.
+  while (true) {
+    const choice = await askSelect(ctx, "pi-switch 配置", [
+      "Provider 管理",
+      "模型别名",
+      "账号（API Key 池）",
+      "路由策略",
+      "重载配置（reload）",
+      "帮助",
+    ]);
+    if (!choice) return;
+    switch (choice) {
+      case "Provider 管理": await providersMenu(ctx, deps); break;
+      case "模型别名": await modelsMenu(ctx, deps); break;
+      case "账号（API Key 池）": await accountsMenu(ctx, deps); break;
+      case "路由策略": await strategyMenu(ctx, deps); break;
+      case "重载配置（reload）": await doReload(ctx, deps); break;
+      case "帮助": showHelp(ctx); break;
+    }
   }
 }
 
@@ -208,13 +248,15 @@ async function mainMenu(ctx: ExtensionCommandContext, deps: ConfigCommandDeps): 
 
 async function providersMenu(ctx: ExtensionCommandContext, deps: ConfigCommandDeps): Promise<void> {
   if (!ctx.hasUI) return showHelp(ctx);
-  const config = deps.store.get();
-  const names = Object.keys(config.providers);
-  const options = [...names, "新增 Provider", "返回"];
-  const pick = await askSelect(ctx, `Provider（${names.length} 个）`, options);
-  if (!pick || pick === "返回") return;
-  if (pick === "新增 Provider") return addProviderWizard(ctx, deps);
-  await editProvider(ctx, deps, pick);
+  while (true) {
+    const config = deps.store.get();
+    const names = Object.keys(config.providers);
+    const options = [...names, "新增 Provider", "返回"];
+    const pick = await askSelect(ctx, `Provider（${names.length} 个）`, options);
+    if (!pick || pick === "返回") return;
+    if (pick === "新增 Provider") await addProviderWizard(ctx, deps);
+    else await editProvider(ctx, deps, pick);
+  }
 }
 
 async function editProvider(ctx: ExtensionCommandContext, deps: ConfigCommandDeps, name: string): Promise<void> {
@@ -319,14 +361,19 @@ async function addProviderWizard(ctx: ExtensionCommandContext, deps: ConfigComma
 
 async function modelsMenu(ctx: ExtensionCommandContext, deps: ConfigCommandDeps): Promise<void> {
   if (!ctx.hasUI) return showHelp(ctx);
-  const config = deps.store.get();
-  const aliases = Object.keys(config.models);
-  const options = [...aliases.map((a) => `${a}${config.models[a]?.displayName ? ` (${config.models[a]!.displayName})` : ""}`), "新增别名", "返回"];
-  const pick = await askSelect(ctx, `模型别名 (${aliases.length})`, options);
-  if (!pick || pick === "返回") return;
-  if (pick === "新增别名") return addAliasWizard(ctx, deps);
-  const alias = aliases.find((a) => pick === a || pick === `${a} (${config.models[a]?.displayName})`);
-  if (alias) await editAlias(ctx, deps, alias);
+  while (true) {
+    const config = deps.store.get();
+    const aliases = Object.keys(config.models);
+    const options = [...aliases.map((a) => `${a}${config.models[a]?.displayName ? ` (${config.models[a]!.displayName})` : ""}`), "新增别名", "返回"];
+    const pick = await askSelect(ctx, `模型别名 (${aliases.length})`, options);
+    if (!pick || pick === "返回") return;
+    if (pick === "新增别名") {
+      await addAliasWizard(ctx, deps);
+      continue;
+    }
+    const alias = aliases.find((a) => pick === a || pick === `${a} (${config.models[a]?.displayName})`);
+    if (alias) await editAlias(ctx, deps, alias);
+  }
 }
 
 async function addAliasWizard(ctx: ExtensionCommandContext, deps: ConfigCommandDeps): Promise<void> {
@@ -341,16 +388,20 @@ async function addAliasWizard(ctx: ExtensionCommandContext, deps: ConfigCommandD
   const displayName = (await askInput(ctx, "显示名称（如 GPT-5，可留空）"))?.trim();
   const providerKey = await askProviderKey(ctx, config.providers);
   if (!providerKey) return;
-  const model = (await askInput(ctx, "真实模型 id（发给该 Provider）"))?.trim();
+  const model = (await askInput(ctx, "模型 ID（发给该 Provider）"))?.trim();
   if (!model) return;
 
   const strategyPick = await askSelect(ctx, "路由策略", ["默认", ...Object.values(STRATEGY_LABELS)]);
   const strategy = strategyPick ? strategyFromLabel(strategyPick) : undefined;
 
+  const reasoningPick = await askSelect(ctx, "是否支持思考（reasoning）？", ["否", "是"]);
+  const reasoning = reasoningPick === "是" ? true : undefined;
+
   const alias: ModelAliasConfig = {
     ...(displayName ? { displayName } : {}),
     providers: [{ provider: providerKey, model }],
     ...(strategy ? { strategy } : {}),
+    ...(reasoning ? { reasoning } : {}),
   };
   await editContextWindow(ctx, alias);
   const next = { ...config.models, [name]: alias };
@@ -373,6 +424,7 @@ async function editAlias(ctx: ExtensionCommandContext, deps: ConfigCommandDeps, 
       "添加线路",
       `路由策略: ${aliasCfg.strategy ? STRATEGY_LABELS[aliasCfg.strategy] : "(默认)"}`,
       `显示名称: ${aliasCfg.displayName ?? "(无)"}`,
+      `思考支持（reasoning）: ${aliasCfg.reasoning ? "是" : "否"}`,
       `contextWindow（上下文窗口）: ${formatContextWindow(aliasCfg.contextWindow)}`,
       "保存并重载",
       "删除此别名",
@@ -387,7 +439,7 @@ async function editAlias(ctx: ExtensionCommandContext, deps: ConfigCommandDeps, 
     } else if (pick === "添加线路") {
       const providerKey = await askProviderKey(ctx, providers);
       if (!providerKey) continue;
-      const model = (await askInput(ctx, "真实模型 id"))?.trim();
+      const model = (await askInput(ctx, "模型 ID"))?.trim();
       if (!model) continue;
       aliasCfg.providers ??= [];
       aliasCfg.providers.push({ provider: providerKey, model });
@@ -403,6 +455,10 @@ async function editAlias(ctx: ExtensionCommandContext, deps: ConfigCommandDeps, 
       if (value !== undefined) {
         if (value.trim() === "") delete aliasCfg.displayName; else aliasCfg.displayName = value.trim();
       }
+    } else if (pick.startsWith("思考支持")) {
+      const value = await askSelect(ctx, "是否支持思考（reasoning）？", ["否", "是"]);
+      if (value === "是") aliasCfg.reasoning = true;
+      else delete aliasCfg.reasoning;
     } else if (pick.startsWith("contextWindow")) {
       await editContextWindow(ctx, aliasCfg);
     } else if (pick === "删除此别名") {
@@ -433,8 +489,9 @@ async function editLine(
 
   const options = [
     `所属 Provider: ${binding.provider}`,
-    `真实模型 ID: ${binding.model}`,
+    `模型 ID: ${binding.model}`,
     `线路优先级: ${binding.priority ?? "(默认)"}`,
+    `思考级别映射: ${binding.thinkingLevelMap ? "已配置" : "(未配置)"}`,
     "删除此线路",
     "返回",
   ];
@@ -443,13 +500,15 @@ async function editLine(
   if (pick.startsWith("所属 Provider")) {
     const value = await askProviderKey(ctx, deps.store.get().providers, "更换线路 Provider");
     if (value) binding.provider = value;
-  } else if (pick.startsWith("真实模型 ID")) {
-    const value = (await askInput(ctx, "真实模型 ID", binding.model))?.trim();
+  } else if (pick.startsWith("模型 ID")) {
+    const value = (await askInput(ctx, "模型 ID", binding.model))?.trim();
     if (value) binding.model = value;
   } else if (pick.startsWith("线路优先级")) {
     const value = (await askInput(ctx, "线路优先级（数字越小越优先；留空 = 默认）", binding.priority !== undefined ? String(binding.priority) : ""))?.trim();
     if (value === "") delete binding.priority;
     else if (value && !Number.isNaN(Number(value))) binding.priority = Number(value);
+  } else if (pick.startsWith("思考级别映射")) {
+    await editThinkingLevelMap(ctx, binding);
   } else if (pick === "删除此线路") {
     const ok = await askConfirm(ctx, "删除线路", `确定删除线路 "${binding.provider}/${binding.model}"？`);
     if (ok) aliasCfg.providers?.splice(index, 1);
@@ -462,14 +521,19 @@ async function editLine(
 
 async function accountsMenu(ctx: ExtensionCommandContext, deps: ConfigCommandDeps): Promise<void> {
   if (!ctx.hasUI) return showHelp(ctx);
-  const config = deps.store.get();
-  const names = Object.keys(config.accounts);
-  const options = [...names.map((n) => `${n} (${config.accounts[n].provider})`), "新增账号", "返回"];
-  const pick = await askSelect(ctx, `账号 (${names.length})`, options);
-  if (!pick || pick === "返回") return;
-  if (pick === "新增账号") return addAccountWizard(ctx, deps);
-  const account = names.find((n) => pick === n || pick === `${n} (${config.accounts[n].provider})`);
-  if (account) await editAccount(ctx, deps, account);
+  while (true) {
+    const config = deps.store.get();
+    const names = Object.keys(config.accounts);
+    const options = [...names.map((n) => `${n} (${config.accounts[n].provider})`), "新增账号", "返回"];
+    const pick = await askSelect(ctx, `账号 (${names.length})`, options);
+    if (!pick || pick === "返回") return;
+    if (pick === "新增账号") {
+      await addAccountWizard(ctx, deps);
+      continue;
+    }
+    const account = names.find((n) => pick === n || pick === `${n} (${config.accounts[n].provider})`);
+    if (account) await editAccount(ctx, deps, account);
+  }
 }
 
 async function addAccountWizard(ctx: ExtensionCommandContext, deps: ConfigCommandDeps): Promise<void> {

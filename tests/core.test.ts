@@ -11,10 +11,11 @@ import { ModelResolver } from "../src/model/resolver";
 import { Router } from "../src/router/router";
 import { HealthManager, lineKey, parseRetryAfterHeader, parseRetryAfterMs } from "../src/router/health";
 import { buildModelDefinition, filterModels } from "../src/provider/openai";
-import { mergeStats, type StatsData } from "../src/stats/manager";
+import { formatAttemptUsage, mergeStats, StatsManager, type StatsData } from "../src/stats/manager";
 import type { ResolvedBinding } from "../src/model/resolver";
 import { inferApi, isSupportedApi } from "../src/provider/transport";
-import { cascadeDeleteProvider, providerDependents } from "../src/ui/config";
+import { cascadeDeleteProvider, providerDependents, registerConfigCommand } from "../src/ui/config";
+import { decideFailure } from "../src/errors/decision";
 
 function config(overrides: Partial<PiSwitchConfig> = {}): PiSwitchConfig {
   return {
@@ -45,6 +46,52 @@ function binding(provider: string, priority = 0, accountPriority = 0): ResolvedB
 }
 
 describe("error classification", () => {
+  const baseDecision = {
+    contextUsageReliable: true,
+    contextTokens: 20_000,
+    contextRatio: 20,
+    phase: "connecting" as const,
+    contentCommitted: false,
+    aborted: false,
+    canFailover: true,
+    hasAlternativeAccount: false,
+    hasAlternativeRoute: true,
+    attemptsUsed: 1,
+    maxAttempts: 2,
+    highCostFailoversUsed: 0,
+    maxHighCostFailovers: 1,
+    policy: "balanced" as const,
+    failoverOnUnknown: false,
+  };
+
+  it("applies the structured failure matrix and hard stops", () => {
+    expect(decideFailure({ ...baseDecision, category: "network" })).toMatchObject({ action: "switch-route", costRisk: "low" });
+    expect(decideFailure({ ...baseDecision, category: "auth", hasAlternativeAccount: true })).toMatchObject({ action: "switch-account", scope: "account" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90 })).toMatchObject({ action: "switch-route", costRisk: "high" });
+    expect(decideFailure({ ...baseDecision, category: "unknown" })).toMatchObject({ action: "stop", reasonCode: "unknown-risk-conservative" });
+    expect(decideFailure({ ...baseDecision, category: "network", attemptsUsed: 2 })).toMatchObject({ action: "stop", reasonCode: "attempt-budget-exhausted" });
+    expect(decideFailure({ ...baseDecision, category: "network", contentCommitted: true })).toMatchObject({ action: "stop", reasonCode: "content-already-committed" });
+  });
+
+  it("applies economy and high-cost budgets", () => {
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, policy: "economy" })).toMatchObject({ action: "stop", reasonCode: "economy-policy-limit" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, highCostFailoversUsed: 1 })).toMatchObject({ action: "stop", reasonCode: "high-cost-budget-exhausted" });
+  });
+
+  it("validates cost-aware routing settings", () => {
+    expect(validateConfig(config({ routing: {
+      failureCostPolicy: "balanced",
+      maxAttempts: 2,
+      maxHighCostFailovers: 1,
+      failoverOnUnknown: false,
+    } })).errors).toEqual([]);
+    expect(validateConfig(config({ routing: {
+      failureCostPolicy: "unsafe" as never,
+      maxAttempts: 0,
+      maxHighCostFailovers: -1,
+      failoverOnUnknown: "yes" as never,
+    } })).errors).toHaveLength(4);
+  });
   it.each([
     ["request aborted", "aborted"],
     ["context_length_exceeded", "context-overflow"],
@@ -152,6 +199,26 @@ describe("v0.2 stats merging", () => {
     const merged = mergeStats(base, delta);
     expect(merged.byAlias.gpt).toMatchObject({ requests: 3, successes: 2, failures: 1, failovers: 1, totalLatencyMs: 25 });
     expect(merged.attemptsByLine.p.attempts).toBe(1);
+  });
+
+  it("records context, cache, cost, affinity, and decision telemetry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-switch-stats-"));
+    const stats = new StatsManager(dir);
+    stats.recordAttempt({
+      alias: "gpt", lineId: "line-a", provider: "p", success: true, durationMs: 10,
+      contextTokens: 12_000, contextPercent: 30, contextUsageReliable: true, affinityHit: true,
+      phase: "streaming", attemptNumber: 2, maxAttempts: 2, budgetRemaining: 0, highCostFailoversUsed: 0,
+      decision: { action: "switch-route", scope: "route", costRisk: "medium", reasonCode: "route-failover-allowed", reason: "test" },
+      usage: {
+        input: 100, output: 20, cacheRead: 80, cacheWrite: 10, totalTokens: 200,
+        cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 },
+      },
+    });
+    const attempt = stats.lineAttempts("line-a");
+    expect(attempt).toMatchObject({ contextSamples: 1, affinityHits: 1, usageSamples: 1, cacheReadTokens: 80, cacheWriteTokens: 10, totalCost: 0.33, lastAction: "switch-route", lastReasonCode: "route-failover-allowed" });
+    expect(formatAttemptUsage(attempt)).toContain("读缓存 80");
+    stats.flush();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -386,6 +453,41 @@ describe("v0.3.2 correctness", () => {
   const tempDirs: string[] = [];
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns from nested config menus to their parent instead of exiting /config", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-switch-menu-"));
+    tempDirs.push(dir);
+    const store = new ConfigStore(dir);
+    const selections = ["Provider 管理", "返回", undefined];
+    const titles: string[] = [];
+    let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+
+    registerConfigCommand({
+      registerCommand: (_name: string, options: { handler: typeof handler }) => {
+        handler = options.handler;
+      },
+    } as never, { store, reloadAll: async () => {} });
+
+    const ctx = {
+      hasUI: true,
+      ui: {
+        select: async (title: string) => {
+          titles.push(title);
+          return selections.shift();
+        },
+        notify: () => {},
+      },
+      waitForIdle: async () => {},
+    };
+
+    expect(handler).toBeDefined();
+    await handler!("", ctx);
+    expect(titles).toEqual([
+      "pi-switch 配置",
+      "Provider（0 个）",
+      "pi-switch 配置",
+    ]);
   });
 
   it("merges routing strategy without wiping thresholds", () => {
