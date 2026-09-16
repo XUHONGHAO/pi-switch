@@ -47,6 +47,7 @@ function isLongContext(context: FailureContext): boolean {
 }
 
 function riskFor(context: FailureContext): CostRisk {
+  if (context.status === 403) return "unknown";
   switch (context.category) {
     case "network": return "low";
     case "auth":
@@ -74,21 +75,32 @@ export function decideFailure(context: FailureContext): FailureDecision {
   if (!context.canFailover) return stop("route", costRisk, "strategy-disallows-failover", "当前路由策略不允许故障切换");
   if (context.attemptsUsed >= context.maxAttempts) return stop("request", costRisk, "attempt-budget-exhausted", "已达到本次请求的最大尝试次数");
   if (!context.hasAlternativeAccount && !context.hasAlternativeRoute) return stop("route", costRisk, "no-alternative", "没有可用的备用线路");
-  if (costRisk === "unknown" && !context.failoverOnUnknown) return stop("unknown", costRisk, "unknown-risk-conservative", "无法确认失败成本风险，按保守策略停止");
+  // A 403 with another account on the same binding can be retried without
+  // crossing the route boundary. Keep the risk visible as unknown, but allow
+  // the account-scoped recovery described by the routing matrix.
+  const accountFailure = context.category === "auth" || context.category === "rate-limit";
+  const sameBindingAccountRecovery = context.status === 403 && accountFailure && context.hasAlternativeAccount;
+  if (costRisk === "unknown" && !context.failoverOnUnknown && !sameBindingAccountRecovery) {
+    return stop("unknown", costRisk, "unknown-risk-conservative", "无法确认失败成本风险，按保守策略停止");
+  }
   if (context.policy === "economy" && costRisk !== "low") return stop("route", costRisk, "economy-policy-limit", "economy 成本策略不允许该风险级别的自动切换");
   if (costRisk === "high" && context.policy === "balanced" && context.highCostFailoversUsed >= context.maxHighCostFailovers) {
     return stop("route", costRisk, "high-cost-budget-exhausted", "已达到高成本故障切换预算");
   }
-  const accountFailure = context.category === "auth" || context.category === "rate-limit";
   const action: FailureAction = accountFailure && context.hasAlternativeAccount ? "switch-account" : "switch-route";
+  const permissionRecovery = context.status === 403 && action === "switch-account";
   return {
     action,
     scope: action === "switch-account" ? "account" : "route",
     costRisk,
     ...(context.category === "rate-limit" && context.retryAfterMs !== undefined ? { cooldownMs: context.retryAfterMs } : {}),
     openCircuit: context.category === "network" || context.category === "server",
-    reasonCode: action === "switch-account" ? "account-failover-allowed" : "route-failover-allowed",
-    reason: action === "switch-account" ? "账号级错误，优先切换同线路备用账号" : `允许切换备用线路（成本风险: ${costRisk}）`,
+    reasonCode: permissionRecovery
+      ? "permission-account-failover-allowed"
+      : action === "switch-account" ? "account-failover-allowed" : "route-failover-allowed",
+    reason: permissionRecovery
+      ? "403 权限错误，优先切换同线路备用账号"
+      : action === "switch-account" ? "账号级错误，优先切换同线路备用账号" : `允许切换备用线路（成本风险: ${costRisk}）`,
   };
 }
 

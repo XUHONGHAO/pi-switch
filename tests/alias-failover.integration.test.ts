@@ -41,7 +41,7 @@ async function listen(mode: "fail" | "success"): Promise<{ server: Server; baseU
   return { server, baseUrl: `http://127.0.0.1:${address.port}/v1` };
 }
 
-async function listenAccountAware(failureStatus: 401 | 429): Promise<{ server: Server; baseUrl: string; requests: string[] }> {
+async function listenAccountAware(failureStatus: 401 | 403 | 429): Promise<{ server: Server; baseUrl: string; requests: string[] }> {
   const requests: string[] = [];
   const server = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
@@ -57,7 +57,7 @@ async function listenAccountAware(failureStatus: 401 | 429): Promise<{ server: S
           "content-type": "application/json",
           ...(failureStatus === 429 ? { "retry-after": "60" } : {}),
         });
-        res.end(JSON.stringify({ error: { message: failureStatus === 429 ? "rate limit exceeded" : "invalid api key" } }));
+        res.end(JSON.stringify({ error: { message: failureStatus === 429 ? "rate limit exceeded" : failureStatus === 403 ? "permission denied" : "invalid api key" } }));
         return;
       }
       const request = JSON.parse(body) as { model: string };
@@ -158,7 +158,7 @@ describe("AliasProvider streaming failover", () => {
     expect(aliasProvider.lastRouteInfo()).toMatchObject({ provider: "first", ok: false, failovers: 0, decision: { reasonCode: "attempt-budget-exhausted" } });
   });
 
-  it.each([401, 429] as const)("prefers a same-binding account after %s and keeps the switched account sticky", async (failureStatus) => {
+  it.each([401, 403, 429] as const)("prefers a same-binding account after %s and keeps the switched account sticky", async (failureStatus) => {
     const upstream = await listenAccountAware(failureStatus);
     const dir = mkdtempSync(join(tmpdir(), "pi-switch-account-scope-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -199,7 +199,10 @@ describe("AliasProvider streaming failover", () => {
     for await (const event of providerConfig.streamSimple(model, context, options)) firstEvents.push(event);
     expect(firstEvents.filter((event) => event.type === "text_delta").map((event) => event.delta).join("")).toContain("account ok");
     expect(upstream.requests).toEqual(["Bearer key-a", "Bearer key-b"]);
-    expect(aliasProvider.lastRouteInfo()).toMatchObject({ provider: "upstream", account: "second", failovers: 1, ok: true });
+    expect(aliasProvider.lastRouteInfo()).toMatchObject({
+      provider: "upstream", account: "second", failovers: 1, ok: true,
+      ...(failureStatus === 403 ? { decision: { costRisk: "unknown", reasonCode: "permission-account-failover-allowed" } } : {}),
+    });
     expect(entries[0]).toMatchObject({
       customType: "pi-switch-affinity",
       data: { alias: "gpt", lineId: "upstream-line", accountName: "second" },

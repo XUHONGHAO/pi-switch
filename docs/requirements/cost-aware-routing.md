@@ -199,7 +199,7 @@ pi-switch 不自行拼装各协议的缓存字段。未明确支持相关参数�
 | Context overflow | 停止并交给 pi | 不切换 | request | high |
 | 明确 400/参数错误 | 停止 | 不切换 | request | high |
 | 401/无效 Key | 切换账号；无账号后可切线路 | account 优先 | account | medium |
-| 403/权限不足 | 结构化判断；默认账号优先 | account/route | unknown |
+| 403/权限不足 | 保留 HTTP 状态；有同 binding 账号时优先账号恢复，否则按未知风险保守停止 | account/route | unknown |
 | 429 | 按 `Retry-After` 冷却并切换 | account 优先 | account/route | medium |
 | DNS/拒绝连接/TLS 建连失败 | 自动切换并短期熔断 | route | route | low |
 | 502/503 | 自动切换并冷却线路 | route | route | medium |

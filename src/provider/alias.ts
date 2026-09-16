@@ -392,10 +392,26 @@ export class AliasProvider {
             // also accept OAuth or gateway auth carried entirely by headers.
             // Each native transport performs its own protocol-specific check.
             phase = "connecting";
+            const fetchImpl = options?.fetch ?? globalThis.fetch;
             const upstream = streamWithTransport(targetModel, context, {
               ...options,
               apiKey,
               headers,
+              // pi-ai's onResponse callback runs only after a successful SDK
+              // response. Wrap fetch so non-2xx responses retain status and
+              // Retry-After metadata for structured failure decisions.
+              fetch: async (input, init) => {
+                const response = await fetchImpl(input, init);
+                responseMeta = {
+                  status: response.status,
+                  headers: Object.fromEntries(response.headers.entries()),
+                };
+                phase = response.ok ? "awaiting-response" : phase;
+                retryAfterMs = parseRetryAfterHeader(
+                  response.headers.get("retry-after") ?? response.headers.get("Retry-After") ?? undefined,
+                );
+                return response;
+              },
               onResponse: async (response, responseModel) => {
                 responseMeta = response;
                 phase = "awaiting-response";

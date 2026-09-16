@@ -428,6 +428,12 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 
 阶段 D 第一批已完成。后续仍可在本阶段扩展 403 的更细作用域判定、账号配额策略和更丰富的账号诊断，但不改变当前 binding 优先级与账号优先级语义。
 
+阶段 D 第二批：
+
+- [x] 保留非 2xx fetch 的 HTTP 状态和 `Retry-After` 元数据，避免 pi-ai 错误事件丢失 403 作用域信息。
+- [x] 403 + 同 binding 备用账号时按 `unknown` 成本风险执行账号级恢复；无账号恢复时按未知风险保守停止。
+- [x] 增加 403 单元与端到端集成覆盖。
+
 ### 阶段 E：增强决策与显式缓存域
 
 - 增加完整决策原因和成本风险诊断。

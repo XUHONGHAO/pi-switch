@@ -67,6 +67,12 @@ describe("error classification", () => {
   it("applies the structured failure matrix and hard stops", () => {
     expect(decideFailure({ ...baseDecision, category: "network" })).toMatchObject({ action: "switch-route", costRisk: "low" });
     expect(decideFailure({ ...baseDecision, category: "auth", hasAlternativeAccount: true })).toMatchObject({ action: "switch-account", scope: "account" });
+    expect(decideFailure({ ...baseDecision, category: "auth", status: 403, hasAlternativeAccount: true })).toMatchObject({
+      action: "switch-account", scope: "account", costRisk: "unknown", reasonCode: "permission-account-failover-allowed",
+    });
+    expect(decideFailure({ ...baseDecision, category: "auth", status: 403, hasAlternativeAccount: false })).toMatchObject({
+      action: "stop", reasonCode: "unknown-risk-conservative", costRisk: "unknown",
+    });
     expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90 })).toMatchObject({ action: "switch-route", costRisk: "high" });
     expect(decideFailure({ ...baseDecision, category: "unknown" })).toMatchObject({ action: "stop", reasonCode: "unknown-risk-conservative" });
     expect(decideFailure({ ...baseDecision, category: "network", attemptsUsed: 2 })).toMatchObject({ action: "stop", reasonCode: "attempt-budget-exhausted" });
