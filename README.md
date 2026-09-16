@@ -274,9 +274,10 @@ pi-switch 支持为模型配置思考级别映射，让你可以使用 `Shift+Ta
     "contextWindow": 1000000,
     "providers": [
       {
-        "provider": "openai_official",
+        "provider": "openai_compatible",
         "model": "gpt-5",
-        "priority": 1
+        "priority": 1,
+        "accounts": ["main_key", "backup_key"]
       },
       {
         "provider": "openai_compatible",
@@ -307,7 +308,7 @@ pi-switch 支持为模型配置思考级别映射，让你可以使用 `Shift+Ta
 }
 ```
 
-未配置账号池时使用 Provider 自身的 `apiKey`；配置账号池后，每个启用账号会作为独立候选线路。
+未配置账号池时使用 Provider 自身的 `apiKey`；配置账号池后，每个启用账号会作为独立候选线路。binding 可通过 `accounts` 限定可用账号；省略时使用该 Provider 的全部启用账号。发生 401/429 时，pi-switch 会优先在当前 binding 的其他账号间切换，成功后当前会话会继续粘住切换后的账号。
 
 ### 路由健康参数示例
 

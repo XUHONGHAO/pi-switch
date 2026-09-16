@@ -39,11 +39,16 @@ export interface Selection {
   affinityHit: boolean;
 }
 
+interface AffinityTarget {
+  lineId: string;
+  accountName?: string;
+}
+
 export class Router {
   /** Per-alias round-robin counters (legacy request-scoped balance). */
   private readonly counters = new Map<string, number>();
-  /** Session affinity map: "sessionId:alias" -> binding identity. */
-  private readonly affinity = new Map<string, string>();
+  /** Session affinity map: "sessionId:alias" -> binding/account identity. */
+  private readonly affinity = new Map<string, AffinityTarget>();
 
   constructor(private readonly store: ConfigStore) {}
 
@@ -100,9 +105,13 @@ export class Router {
   getAffinity(sessionId: string | undefined, alias: string, candidates: ResolvedBinding[]): ResolvedBinding | undefined {
     if (!sessionId) return undefined;
     const key = this.affinityKey(sessionId, alias);
-    const identity = this.affinity.get(key);
-    if (!identity) return undefined;
-    return candidates.find((b) => this.bindingIdentity(b) === identity);
+    const target = this.affinity.get(key);
+    if (!target) return undefined;
+    // Prefer an account-specific entry. Older persisted entries only contain
+    // lineId, so retain a line-level fallback for backwards compatibility.
+    const exact = candidates.find((b) => this.bindingIdentity(b) === target.lineId && b.accountName === target.accountName);
+    if (exact) return exact;
+    return candidates.find((b) => this.bindingIdentity(b) === target.lineId);
   }
 
   /**
@@ -112,15 +121,22 @@ export class Router {
   setAffinity(sessionId: string | undefined, alias: string, binding: ResolvedBinding): boolean {
     if (!sessionId) return false;
     const key = this.affinityKey(sessionId, alias);
-    const identity = this.bindingIdentity(binding);
-    if (this.affinity.get(key) === identity) return false;
-    this.affinity.set(key, identity);
+    const target: AffinityTarget = {
+      lineId: this.bindingIdentity(binding),
+      ...(binding.accountName ? { accountName: binding.accountName } : {}),
+    };
+    const previous = this.affinity.get(key);
+    if (previous?.lineId === target.lineId && previous.accountName === target.accountName) return false;
+    this.affinity.set(key, target);
     return true;
   }
 
   /** Restore a persisted affinity entry for a resumed session. */
-  restoreAffinity(sessionId: string, alias: string, lineId: string): void {
-    this.affinity.set(this.affinityKey(sessionId, alias), lineId);
+  restoreAffinity(sessionId: string, alias: string, lineId: string, accountName?: string): void {
+    this.affinity.set(
+      this.affinityKey(sessionId, alias),
+      { lineId, ...(accountName ? { accountName } : {}) },
+    );
   }
 
   /**
@@ -143,12 +159,22 @@ export class Router {
   select(alias: string, bindings: ResolvedBinding[], sessionId?: string): Selection {
     const strategy = this.strategyFor(alias);
 
-    // Lower priority value wins; stable sort keeps declaration order for ties.
-    // Accounts expand to per-key candidates, so order by binding priority
-    // first, then account priority within the same binding.
-    const attempts = [...bindings].sort(
-      (a, b) => (a.priority ?? 0) - (b.priority ?? 0) || (a.accountPriority ?? 0) - (b.accountPriority ?? 0),
-    );
+    // Lower priority value wins. Accounts are expanded to per-key candidates,
+    // so keep binding groups together and apply account priority within each
+    // binding; declaration order breaks equal-priority binding ties.
+    const bindingPositions = new Map<string, number>();
+    bindings.forEach((binding, index) => {
+      const identity = this.bindingIdentity(binding);
+      if (!bindingPositions.has(identity)) bindingPositions.set(identity, index);
+    });
+    const attempts = [...bindings].sort((a, b) => {
+      const priority = (a.priority ?? 0) - (b.priority ?? 0);
+      if (priority !== 0) return priority;
+      const position = (bindingPositions.get(this.bindingIdentity(a)) ?? 0)
+        - (bindingPositions.get(this.bindingIdentity(b)) ?? 0);
+      if (position !== 0) return position;
+      return (a.accountPriority ?? 0) - (b.accountPriority ?? 0);
+    });
 
     // Check session affinity (only for session-scoped balance and failover).
     const scope = this.balanceScope();

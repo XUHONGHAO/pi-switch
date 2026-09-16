@@ -9,8 +9,9 @@
  *
  * Accounts expand into per-request candidate lines at routing time
  * (see AliasProvider.expandCandidates): each enabled account becomes a
- * candidate with its own key, ordered by binding priority then account
- * priority. The Router's failover / balance machinery applies unchanged.
+ * candidate with its own key, ordered by binding priority, binding declaration,
+ * then account priority within that binding. The Router's failover / balance
+ * machinery applies unchanged.
  */
 
 import type { ConfigStore } from "../config/store";
@@ -35,11 +36,12 @@ export interface AccountInfo {
 export class AccountManager {
   constructor(private readonly store: ConfigStore) {}
 
-  /** Enabled accounts for a provider, ordered by priority. */
-  forProvider(provider: string): AccountInfo[] {
+  /** Enabled accounts for a provider, optionally restricted to a binding scope. */
+  forProvider(provider: string, allowedNames?: readonly string[]): AccountInfo[] {
     const accounts: AccountInfo[] = [];
     for (const [name, account] of Object.entries(this.store.get().accounts)) {
       if (account.provider !== provider) continue;
+      if (allowedNames && !allowedNames.includes(name)) continue;
       if (account.enabled === false) continue;
       // Leading !commands are resolved at request time, matching pi's secret semantics.
       const apiKey = account.apiKey.startsWith("!") ? account.apiKey : resolveEnvRef(account.apiKey);

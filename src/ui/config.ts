@@ -491,6 +491,7 @@ async function editLine(
     `所属 Provider: ${binding.provider}`,
     `模型 ID: ${binding.model}`,
     `线路优先级: ${binding.priority ?? "(默认)"}`,
+    `账号范围: ${binding.accounts?.join(", ") ?? "Provider 全部账号"}`,
     `思考级别映射: ${binding.thinkingLevelMap ? "已配置" : "(未配置)"}`,
     "删除此线路",
     "返回",
@@ -507,6 +508,13 @@ async function editLine(
     const value = (await askInput(ctx, "线路优先级（数字越小越优先；留空 = 默认）", binding.priority !== undefined ? String(binding.priority) : ""))?.trim();
     if (value === "") delete binding.priority;
     else if (value && !Number.isNaN(Number(value))) binding.priority = Number(value);
+  } else if (pick.startsWith("账号范围")) {
+    const current = binding.accounts?.join(", ") ?? "";
+    const value = (await askInput(ctx, "账号范围（逗号分隔；留空 = Provider 全部账号）", current))?.trim();
+    if (value === undefined) return;
+    const names = splitPatterns(value);
+    if (names) binding.accounts = names;
+    else delete binding.accounts;
   } else if (pick.startsWith("思考级别映射")) {
     await editThinkingLevelMap(ctx, binding);
   } else if (pick === "删除此线路") {

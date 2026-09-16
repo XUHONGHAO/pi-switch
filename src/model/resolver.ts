@@ -42,6 +42,8 @@ export interface ResolvedBinding {
   /** Binding-level compatibility and thinking controls. */
   compat?: Model<Api>["compat"];
   thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
+  /** Optional account names allowed for this binding. */
+  accountNames?: readonly string[];
   /** Routing priority (lower = preferred). */
   priority?: number;
   /** Account key name when routed through an accounts.json key pool. */
@@ -92,6 +94,7 @@ export class ModelResolver {
         type: provider.type,
         api,
         baseUrl: effectiveBaseUrl,
+        ...(binding.accounts ? { accountNames: [...binding.accounts] } : {}),
         ...(binding.priority !== undefined ? { priority: binding.priority } : {}),
         ...(resolvedKey ? { apiKey: resolvedKey } : {}),
         ...((provider.headers || binding.headers) ? { headers: { ...(provider.headers ?? {}), ...(binding.headers ?? {}) } } : {}),

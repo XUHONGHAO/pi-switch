@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Account/line hierarchy (Phase D first batch)**: bindings can restrict their account pool with `accounts`; 401/429 failover prefers another account on the same binding, and successful account switches remain session-affine and `/resume`-restorable.
 - **Cost-aware failover (Phase B/C first batch)**: records context usage, cache read/write, cost and affinity telemetry; adds structured failure decisions with `failureCostPolicy`, `maxAttempts`, `maxHighCostFailovers` and conservative unknown-error handling.
 - Session affinity is persisted as a pi Custom Entry using only a SHA-256 session id hash, so `/resume` restores the line without exposing the raw session id.
 - **Session affinity (Phase A)**: `balance` now defaults to session-scoped distribution using rendezvous hashing, keeping each pi session on the same binding for better cache hit rates. `failover` also sticks to the switched binding within the same session. Add `"balanceScope": "request"` to `routing.json` to restore legacy round-robin behavior.

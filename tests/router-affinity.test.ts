@@ -152,6 +152,26 @@ describe("Router session affinity (Phase A)", () => {
     expect(selection.affinityHit).toBe(true);
   });
 
+  it("restores persisted account identity when available", () => {
+    const dir = writeConfig({ strategy: "failover" });
+    tempDirs.push(dir);
+    const store = new ConfigStore(dir);
+    const router = new Router(store);
+    const first = { ...binding("first", "gpt"), lineId: "stable-first", accountName: "a1" };
+    const second = { ...binding("first", "gpt"), lineId: "stable-first", accountName: "a2" };
+
+    router.restoreAffinity(SESSION_A, "test", "stable-first", "a2");
+    const selection = router.select("test", [first, second], SESSION_A);
+    expect(selection.binding.accountName).toBe("a2");
+    expect(selection.affinityHit).toBe(true);
+
+    const fallbackRouter = new Router(store);
+    fallbackRouter.restoreAffinity(SESSION_A, "test", "stable-first", "a2");
+    const fallback = fallbackRouter.select("test", [first], SESSION_A);
+    expect(fallback.binding.accountName).toBe("a1");
+    expect(fallback.affinityHit).toBe(true);
+  });
+
   it("clearSession removes affinity", () => {
     const dir = writeConfig({ strategy: "balance", balanceScope: "session" });
     tempDirs.push(dir);

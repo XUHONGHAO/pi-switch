@@ -165,6 +165,32 @@ function validateThinkingLevelMap(value: unknown, path: string, errors: string[]
   }
 }
 
+function validateBindingAccounts(
+  value: unknown,
+  path: string,
+  providerName: unknown,
+  configuredAccounts: Record<string, unknown>,
+  errors: string[],
+  warnings: string[],
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || !item.trim())) {
+    errors.push(`${path}: expected a non-empty array of account names`);
+    return;
+  }
+  if (new Set(value).size !== value.length) warnings.push(`${path}: contains duplicate account names`);
+  for (const name of value as string[]) {
+    const account = configuredAccounts[name];
+    if (!account) {
+      errors.push(`${path}: account "${name}" does not exist`);
+      continue;
+    }
+    if (isRecord(account) && account.provider !== providerName) {
+      errors.push(`${path}: account "${name}" belongs to provider "${String(account.provider ?? "")}", expected "${String(providerName ?? "")}"`);
+    }
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -347,6 +373,14 @@ export function validateConfig(config: PiSwitchConfig): ValidationResult {
         : undefined;
       validateCompat(binding.compat, effectiveApi, `${bindingPath}.compat`, errors, warnings);
       validateThinkingLevelMap(binding.thinkingLevelMap, `${bindingPath}.thinkingLevelMap`, errors);
+      validateBindingAccounts(
+        binding.accounts,
+        `${bindingPath}.accounts`,
+        binding.provider,
+        isRecord(config.accounts) ? config.accounts : {},
+        errors,
+        warnings,
+      );
       if (binding.priority !== undefined && !finiteNumber(binding.priority)) {
         errors.push(`${bindingPath}.priority: expected a finite number`);
       }

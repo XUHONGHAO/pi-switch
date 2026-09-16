@@ -335,6 +335,19 @@ pi> /switch status        # 查看当前线路与统计
 | `enabled` | 是否启用（默认 true，false 直接跳过） |
 | `stats` | 使用统计（由扩展写入，无需手动维护） |
 
+模型别名的每条 binding 可选 `accounts` 字段限制账号范围：
+
+```json
+{
+  "provider": "sub2api",
+  "model": "gpt-5",
+  "priority": 1,
+  "accounts": ["sub2api_main", "sub2api_backup"]
+}
+```
+
+省略 `accounts` 时使用该 Provider 的全部启用账号。账号必须存在且属于同一 Provider；401/429 会优先切换当前 binding 的其他账号，成功后当前会话继续使用该账号。
+
 ### 4.5 stats.json — 统计（自动生成）
 
 无需手动配置，由扩展写入并跨会话累计：
@@ -425,13 +438,13 @@ pi> /config reload          # 外部改了 JSON 后热重载
 | `failover` | 按优先级依次尝试，线路在**产生内容前**失败自动切下一条 | 追求可用性 |
 | `balance` | 轮询所有线路，失败时继续轮转 | 多中转分摊负载 |
 
-故障切换是**双层**的：先切 Provider 线路，再切同 Provider 的账号。
+故障切换是**分层**的：账号级 401/429 先切当前 binding 的其他账号；网络或线路级错误再切其他 binding。
 
 ```
 请求 pi-switch/gpt5
-  → 线路 1: openai_official     连接失败 → 切换
-  → 线路 2: sub2api/main 账号   401 → 切换
-  → 线路 2: sub2api/backup 账号 成功 ✓
+  → 线路 1: sub2api/main 账号   401 → 切换同 binding 账号
+  → 线路 1: sub2api/backup 账号 成功 ✓
+  → 若该 binding 没有可用账号，再进入其他线路
 ```
 
 日志示例：
@@ -456,9 +469,10 @@ pi> /config reload          # 外部改了 JSON 后热重载
 }
 ```
 
-- 有账号的 Provider：候选线路展开为"每个账号一条"，绑定优先级为主、账号优先级为次
+- 有账号的 Provider：候选线路展开为"每个账号一条"，binding 优先级为主、账号优先级仅在同一 binding 内生效
 - 未配置账号的 Provider：使用 providers.json 的 `apiKey`
 - 账号 `apiKey` 无法解析（环境变量缺失）时跳过并告警
+- binding 配置 `accounts` 后，仅展开指定账号；成功切换后的账号会参与会话亲和与 `/resume` 恢复
 
 ---
 

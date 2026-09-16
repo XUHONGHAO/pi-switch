@@ -128,8 +128,26 @@ describe("Router", () => {
       binding("account-b", 1, 2),
       binding("account-a", 1, 1),
     ]);
-    expect(selection.attempts.map((item) => item.provider)).toEqual(["account-a", "account-b", "second"]);
+    expect(selection.attempts.map((item) => item.provider)).toEqual(["account-b", "account-a", "second"]);
     expect(selection.canFailover).toBe(true);
+  });
+
+  it("keeps account candidates grouped and sticks to an account-specific affinity", () => {
+    const store = { get: () => config({ routing: { strategy: "failover" } }) } as never;
+    const router = new Router(store);
+    const accountA1 = { ...binding("first", 1, 5), lineId: "line-first", accountName: "a1" };
+    const accountA2 = { ...binding("first", 1, 1), lineId: "line-first", accountName: "a2" };
+    const accountB1 = { ...binding("second", 1, 0), lineId: "line-second", accountName: "b1" };
+
+    const selection = router.select("gpt", [accountA1, accountB1, accountA2]);
+    expect(selection.attempts.map((item) => `${item.lineId}/${item.accountName}`)).toEqual([
+      "line-first/a2", "line-first/a1", "line-second/b1",
+    ]);
+
+    router.setAffinity("session-1", "gpt", accountA2);
+    const sticky = router.select("gpt", [accountA1, accountA2, accountB1], "session-1");
+    expect(sticky.binding.accountName).toBe("a2");
+    expect(sticky.affinityHit).toBe(true);
   });
 
   it("rotates balance candidates", () => {
@@ -313,6 +331,24 @@ describe("configuration validation", () => {
     expect(result.errors.some((error) => error.includes("thinkingLevelMap.high"))).toBe(true);
     expect(result.errors.some((error) => error.includes("failureThreshold"))).toBe(true);
     expect(result.errors.some((error) => error.includes("cooldownMs"))).toBe(true);
+  });
+
+  it("validates binding-scoped account names and provider ownership", () => {
+    const result = validateConfig(config({
+      providers: {
+        p: { type: "openai", baseUrl: "https://example.com/v1" },
+        q: { type: "openai", baseUrl: "https://other.example/v1" },
+      },
+      accounts: {
+        p1: { provider: "p", apiKey: "key-1" },
+        q1: { provider: "q", apiKey: "key-2" },
+      },
+      models: {
+        scoped: { providers: [{ provider: "p", model: "m", accounts: ["p1", "missing", "q1"] }] },
+      },
+    }));
+    expect(result.errors).toContain('models.json:scoped.providers[0].accounts: account "missing" does not exist');
+    expect(result.errors.some((error) => error.includes('account "q1" belongs to provider "q"'))).toBe(true);
   });
 
   it("rejects malformed top-level sections", () => {

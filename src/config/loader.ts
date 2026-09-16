@@ -136,6 +136,8 @@ export interface ModelProviderBinding {
   /** Binding-level compatibility and thinking controls. */
   compat?: Model<Api>["compat"];
   thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
+  /** Optional account names allowed for this binding. Omitted means all provider accounts. */
+  accounts?: string[];
   /** Routing priority (lower = preferred). Defaults to declaration order. */
   priority?: number;
 }

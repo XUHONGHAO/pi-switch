@@ -51,6 +51,12 @@ pi-switch 是 AI Agent Model Gateway & Provider Manager（pi agent Extension）�
 - **协议感知校验**：按有效 `api` 检查 `compat` 字段并对错配字段告警；`thinkingLevelMap` 支持 `max`
 - **端到端覆盖**：增加 AliasProvider → ModelRegistry header-only auth → OpenAI Responses 的真实 HTTP/SSE 测试
 
+## 成本感知路由增量
+
+- **阶段 A/B**：会话级 balance 与 failover 亲和、上下文用量、缓存读写和费用观测
+- **阶段 C 第一批**：结构化故障决策、成本偏好和请求尝试预算
+- **阶段 D 第一批**：binding `accounts` 范围、401/429 同 binding 账号优先，以及账号级会话亲和与 `/resume` 恢复
+
 ## v0.3 能力
 
 - **原生多协议路由**：委托 pi-ai transport 支持 `openai-completions`、`openai-responses`、`anthropic-messages`、`google-generative-ai`

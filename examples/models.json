@@ -4,7 +4,7 @@
     "strategy": "failover",
     "providers": [
       { "id": "openai-official-gpt5", "provider": "openai_official", "model": "gpt-5", "api": "openai-responses", "priority": 1 },
-      { "provider": "sub2api", "model": "gpt-5", "api": "openai-completions", "priority": 2 }
+      { "provider": "sub2api", "model": "gpt-5", "api": "openai-completions", "priority": 2, "accounts": ["gpt5_main", "gpt5_backup"] }
     ]
   },
   "claude": {

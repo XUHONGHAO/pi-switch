@@ -139,7 +139,7 @@ function showProviders(
     const bindings = resolver.resolve(alias);
     console.log(`  ${alias} (${resolver.get(alias)?.displayName ?? alias})`);
     for (const b of bindings) {
-      const accs = accounts.forProvider(b.provider);
+      const accs = accounts.forProvider(b.provider, b.accountNames);
       if (accs.length === 0) {
         console.log(`    -> ${b.provider}/${b.model}${b.apiKey ? " [key]" : " [NO KEY]"}`);
       } else {
@@ -168,8 +168,8 @@ function showCheck(
     const bindings = resolver.resolve(alias);
     let ready = 0;
     for (const binding of bindings) {
-      const configuredPool = accounts.hasAccounts(binding.provider);
-      const usableAccounts = accounts.forProvider(binding.provider);
+      const configuredPool = binding.accountNames !== undefined || accounts.hasAccounts(binding.provider);
+      const usableAccounts = accounts.forProvider(binding.provider, binding.accountNames);
       if (configuredPool ? usableAccounts.length > 0 : Boolean(binding.apiKey)) ready += 1;
     }
     if (ready === 0) issues += 1;

@@ -1,8 +1,8 @@
 # 成本感知路由策略设计草案
 
-- 状态：in-progress（阶段 0、A、B 已完成；阶段 C 第一批已完成）
+- 状态：in-progress（阶段 0、A、B、C 第一批及 D 第一批已完成）
 - 日期：2026-08-13
-- 最近更新：2026-09-14（阶段 B 收尾与阶段 C 第一批：结构化故障决策、成本策略和尝试预算）
+- 最近更新：2026-09-15（阶段 D 第一批：binding 账号范围、账号优先切换与账号亲和）
 - 对应需求：[`../requirements/cost-aware-routing.md`](../requirements/cost-aware-routing.md)
 - 已核实契约：[`../architecture/pi-native-passthrough.md`](../architecture/pi-native-passthrough.md)
 - 当前实现参考：`src/router/router.ts`、`src/errors/classify.ts`、`src/provider/alias.ts`
@@ -403,7 +403,7 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] 增加 session shutdown/config reload 清理（`session_shutdown` 调用 `router.clearSession()`，`reset()` 清空全部）。
 - [x] 提供 `balanceScope: "request"` 兼容旧行为（默认 `"session"`，request 模式仍用轮询计数器）。
 - [x] 更新用户文档与 CHANGELOG（BREAKING 标记 + 迁移说明）。
-- 回归测试：`tests/router-affinity.test.ts`（6 项单元测试覆盖 Router 亲和逻辑）。
+- 回归测试：`tests/router-affinity.test.ts`（8 项单元测试覆盖 Router 亲和逻辑）。
 
 ### 阶段 B：上下文成本与真实缓存观测（最高优先级）
 
@@ -418,13 +418,15 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] 将阶段 B 的当前上下文成本作为决策输入。
 - [x] 替换布尔 failover 判断并补齐错误矩阵单元测试。
 
-阶段 C 第一批已完成。后续账号/线路分层、显式 cacheDomain 和更细的 timeout 阶段识别仍属于阶段 D/E。
+阶段 C 第一批已完成；账号/线路分层第一批已在阶段 D 完成，显式 `cacheDomain` 和更细的 timeout 阶段识别仍属于阶段 E。
 
 ### 阶段 D：账号/线路分层
 
-- 保留 binding 与 account 的层级关系。
-- 401/429 优先同 binding 换账号。
-- 补充不同错误作用域的集成测试。
+- [x] 保留 binding 与 account 的层级关系；binding 可用 `accounts` 限定账号范围，省略时兼容 Provider 级账号池。
+- [x] 401/429 优先同 binding 换账号，并让成功切换后的账号参与会话亲和。
+- [x] 补充账号范围校验、候选分组、账号亲和恢复和 401 集成测试。
+
+阶段 D 第一批已完成。后续仍可在本阶段扩展 403 的更细作用域判定、账号配额策略和更丰富的账号诊断，但不改变当前 binding 优先级与账号优先级语义。
 
 ### 阶段 E：增强决策与显式缓存域
 
@@ -439,12 +441,13 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 
 - [x] `sessionId`、`cacheRetention` 和目标模型 `compat` 穿过 AliasProvider 到原生 transport；
 - [x] 支持的 transport 按 compat 生成缓存键、缓存控制或上游亲和信息；
-- 同一 pi Session ID/alias 的亲和命中；
+- [x] 同一 pi Session ID/alias 的亲和命中；
 - 不同 session 的 balance 分配；
 - failover 新会话仍从主线路开始；
 - 切换后不立即 failback；
 - Abort、overflow、400 和已提交内容硬停止；
-- 401、429 同 binding 账号优先；
+- [x] 401、429 同 binding 账号优先；
+- [x] binding `accounts` 范围校验、账号候选分组和账号级亲和恢复；
 - 网络失败跨线路；
 - 高成本 timeout 在三种成本策略下的差异；
 - attempt 预算耗尽；

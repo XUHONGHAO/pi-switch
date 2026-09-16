@@ -86,6 +86,7 @@ interface AffinityEntryData {
   sessionIdHash: string;
   alias: string;
   lineId: string;
+  accountName?: string;
 }
 
 interface AttemptTelemetry {
@@ -209,7 +210,7 @@ export class AliasProvider {
         data.alias.length === 0 ||
         data.lineId.length === 0
       ) continue;
-      this.router.restoreAffinity(sessionId, data.alias, data.lineId);
+      this.router.restoreAffinity(sessionId, data.alias, data.lineId, typeof data.accountName === "string" ? data.accountName : undefined);
     }
   }
 
@@ -425,7 +426,7 @@ export class AliasProvider {
                 // Record session affinity after first content event (Phase A).
                 if (!affinityRecorded) {
                   const changed = this.router.setAffinity(sessionId, model.id, target);
-                  if (changed) this.persistAffinity(sessionId, model.id, target.lineId);
+                  if (changed) this.persistAffinity(sessionId, model.id, target.lineId, target.accountName);
                   affinityRecorded = true;
                 }
               }
@@ -576,15 +577,15 @@ export class AliasProvider {
   private expandCandidates(bindings: ResolvedBinding[]): ResolvedBinding[] {
     const candidates: ResolvedBinding[] = [];
     for (const binding of bindings) {
-      const hasConfiguredAccounts = this.accounts.hasAccounts(binding.provider);
-      const accounts = this.accounts.forProvider(binding.provider);
+      const hasConfiguredAccounts = binding.accountNames !== undefined || this.accounts.hasAccounts(binding.provider);
+      const accounts = this.accounts.forProvider(binding.provider, binding.accountNames);
       if (!hasConfiguredAccounts) {
         candidates.push(binding);
         continue;
       }
       if (accounts.length === 0) {
         console.warn(
-          `[pi-switch] provider "${binding.provider}": account pool is configured but has no enabled account with a resolvable key`,
+          `[pi-switch] line "${binding.lineId}": account scope is configured but has no enabled account with a resolvable key`,
         );
         continue;
       }
@@ -674,13 +675,14 @@ export class AliasProvider {
     };
   }
 
-  private persistAffinity(sessionId: string | undefined, alias: string, lineId: string): void {
+  private persistAffinity(sessionId: string | undefined, alias: string, lineId: string, accountName?: string): void {
     if (!sessionId || typeof this.pi.appendEntry !== "function") return;
     const data: AffinityEntryData = {
       version: 1,
       sessionIdHash: hashSessionId(sessionId),
       alias,
       lineId,
+      ...(accountName ? { accountName } : {}),
     };
     this.pi.appendEntry(AFFINITY_ENTRY_TYPE, data);
   }
