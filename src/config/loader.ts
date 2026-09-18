@@ -205,21 +205,23 @@ export function resolveConfigDir(): string {
   return override ? join(override) : join(homedir(), DEFAULT_CONFIG_DIR_NAME);
 }
 
-function readJsonFile<T>(file: string, fallback: T): T {
+function readJsonFile<T>(file: string, fallback: T, strict = false): T {
   try {
     if (!existsSync(file)) return fallback;
     const raw = readFileSync(file, "utf-8");
     if (!raw.trim()) return fallback;
     const value = JSON.parse(raw);
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      console.error(
-        `[pi-switch] ${file}: expected a JSON object, got ${Array.isArray(value) ? "array" : typeof value}`,
-      );
+      const message = `[pi-switch] ${file}: expected a JSON object, got ${Array.isArray(value) ? "array" : typeof value}`;
+      if (strict) throw new Error(message);
+      console.error(message);
       return fallback;
     }
     return value as T;
   } catch (err) {
-    console.error(`[pi-switch] Failed to load ${file}: ${(err as Error).message}`);
+    const message = `[pi-switch] Failed to load ${file}: ${(err as Error).message}`;
+    if (strict) throw new Error(message, { cause: err });
+    console.error(message);
     return fallback;
   }
 }
@@ -227,18 +229,22 @@ function readJsonFile<T>(file: string, fallback: T): T {
 /**
  * Load the full pi-switch configuration.
  * Creates the config directory when it does not exist.
- * Missing or malformed files fall back to their defaults.
+ * Missing or malformed files fall back to their defaults unless strict mode
+ * is requested by ConfigStore during an explicit reload.
  */
-export function loadConfig(configDir?: string): PiSwitchConfig {
+export function loadConfig(configDir?: string, options: { strict?: boolean } = {}): PiSwitchConfig {
   const dir = configDir ?? resolveConfigDir();
   mkdirSync(dir, { recursive: true });
+  const strict = options.strict ?? false;
 
   return {
     configDir: dir,
-    providers: readJsonFile<Record<string, ProviderConfig>>(join(dir, "providers.json"), {}),
-    accounts: readJsonFile<Record<string, AccountConfig>>(join(dir, "accounts.json"), {}),
-    models: readJsonFile<Record<string, ModelAliasConfig>>(join(dir, "models.json"), {}),
-    routing: readJsonFile<RoutingConfig>(join(dir, "routing.json"), {}),
+    providers: readJsonFile<Record<string, ProviderConfig>>(join(dir, "providers.json"), {}, strict),
+    accounts: readJsonFile<Record<string, AccountConfig>>(join(dir, "accounts.json"), {}, strict),
+    models: readJsonFile<Record<string, ModelAliasConfig>>(join(dir, "models.json"), {}, strict),
+    routing: readJsonFile<RoutingConfig>(join(dir, "routing.json"), {}, strict),
+    // stats.json is generated telemetry, not user routing configuration;
+    // keep its historical best-effort recovery even during strict reloads.
     stats: readJsonFile<Record<string, unknown>>(join(dir, "stats.json"), {}),
   };
 }

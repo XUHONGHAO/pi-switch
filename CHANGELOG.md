@@ -4,6 +4,11 @@
 
 ### Added
 
+- **Deferred scope documented**: `cacheDomain`, account quota automation, TUI-owned native cache switches and host-level process-restart E2E are explicitly deferred with entry criteria in ADR 0007.
+- **Routing hardening**: connection errors such as `Connection error.` now classify as network failures; invalid external reloads are rejected without replacing the last valid config; duplicate implicit binding identities are rejected; and abnormal streams update the last failed route correctly.
+- **Phase E current batch**: verifies Custom Entry affinity restoration for resumed/tree branches, uses the latest persisted entry, and prevents `/new`, `/fork` and `/clone` sessions from inheriting the parent session's route or account.
+- **Phase E second batch**: classifies timeout cost risk by request phase; connection/setup timeouts remain low risk, while timeouts after HTTP response use context length and policy to detect high-cost retries. Any received HTTP response now advances diagnostics to `awaiting-response`, including non-2xx responses.
+- **Phase E first batch**: persists the latest attempt's HTTP status, `Retry-After`, request phase, failure scope, action, cost risk, reason, cooldown, circuit decision and attempt budget; `/switch status` now exposes the diagnostic summary alongside usage telemetry.
 - **Phase D second batch**: preserves non-2xx HTTP status and `Retry-After` metadata through the native fetch path, so 403 account recovery is classified as unknown risk instead of being reported as a generic medium-risk auth failure.
 - **Account/line hierarchy (Phase D first batch)**: bindings can restrict their account pool with `accounts`; 401/429 failover prefers another account on the same binding, and successful account switches remain session-affine and `/resume`-restorable.
 - **Cost-aware failover (Phase B/C first batch)**: records context usage, cache read/write, cost and affinity telemetry; adds structured failure decisions with `failureCostPolicy`, `maxAttempts`, `maxHighCostFailovers` and conservative unknown-error handling.

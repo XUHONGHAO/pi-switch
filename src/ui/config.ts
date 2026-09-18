@@ -102,7 +102,7 @@ function isStrategy(s: string): s is RoutingStrategy {
 const STRATEGY_LABELS: Record<RoutingStrategy, string> = {
   priority: "priority（仅用最高优先级线路，失败不切换）",
   failover: "failover（失败时自动切换线路）",
-  balance: "balance（轮询负载均衡）",
+  balance: "balance（默认会话级均衡；可配置逐请求轮询）",
 };
 
 function strategyFromLabel(label: string): RoutingStrategy | undefined {

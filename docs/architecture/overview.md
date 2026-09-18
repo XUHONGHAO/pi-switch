@@ -13,8 +13,8 @@ pi-switch 是运行在 pi 进程内的模型路由扩展。它把一个模型别
   → AccountManager 展开可用账号
   → Router 按策略与 HealthManager 选择候选线路
   → AliasProvider 调用对应 pi-ai transport
-  → StatsManager 记录 request/attempt
-  → /switch 与状态栏展示结果
+  → StatsManager 记录 request/attempt 与最近决策诊断
+  → /switch 与状态栏展示结果和诊断摘要
 ```
 
 ## 模块边界
@@ -23,7 +23,7 @@ pi-switch 是运行在 pi 进程内的模型路由扩展。它把一个模型别
 - `model` 将配置转换为可路由 binding，不执行网络请求。
 - `router` 负责顺序和健康判断，不处理 TUI。
 - `provider` 负责 Provider 注册、发现和流式协议调用。
-- `stats` 负责统计聚合与持久化，不决定路由策略。
+- `stats` 负责统计聚合、最近 attempt 诊断与持久化，不决定路由策略。
 - `ui` 只编排交互，通过上述模块完成操作。
 
 详细文件职责见 [`../../src/README.md`](../../src/README.md)。影响这些边界的长期决策应新增 ADR。

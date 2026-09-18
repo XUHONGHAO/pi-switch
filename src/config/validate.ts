@@ -301,7 +301,7 @@ export function validateConfig(config: PiSwitchConfig): ValidationResult {
     if (raw.stats !== undefined && !isRecord(raw.stats)) errors.push(`${path}.stats: expected an object`);
   }
 
-  const declaredLineIds = new Map<string, string>();
+  const resolvedLineIds = new Map<string, string>();
   for (const [alias, raw] of modelEntries) {
     const path = `models.json:${alias}`;
     if (!alias.trim()) errors.push(`${path}: alias name must not be empty`);
@@ -329,10 +329,6 @@ export function validateConfig(config: PiSwitchConfig): ValidationResult {
       }
       if (binding.id !== undefined && (typeof binding.id !== "string" || !binding.id.trim())) {
         errors.push(`${bindingPath}.id: expected a non-empty string`);
-      } else if (typeof binding.id === "string") {
-        const previous = declaredLineIds.get(binding.id);
-        if (previous) errors.push(`${bindingPath}.id: duplicate line id "${binding.id}" (already used by ${previous})`);
-        else declaredLineIds.set(binding.id, bindingPath);
       }
       if (binding.authProvider !== undefined && (typeof binding.authProvider !== "string" || !binding.authProvider.trim())) {
         errors.push(`${bindingPath}.authProvider: expected a non-empty string`);
@@ -371,6 +367,22 @@ export function validateConfig(config: PiSwitchConfig): ValidationResult {
       const effectiveApi = provider
         ? inferApi(provider.type, typeof binding.api === "string" ? binding.api as never : provider.api)
         : undefined;
+      const effectiveBaseUrl = provider && typeof provider.baseUrl === "string"
+        ? (typeof binding.baseUrl === "string" ? binding.baseUrl : provider.baseUrl)
+        : undefined;
+      const resolvedLineId = typeof binding.id === "string" && binding.id.trim()
+        ? binding.id.trim()
+        : provider && typeof binding.model === "string" && effectiveBaseUrl && effectiveApi && isSupportedApi(effectiveApi)
+          ? `${binding.provider}|${effectiveApi}|${effectiveBaseUrl}|${binding.model}`
+          : undefined;
+      if (resolvedLineId) {
+        const previous = resolvedLineIds.get(resolvedLineId);
+        if (previous) {
+          errors.push(`${bindingPath}.id: duplicate resolved line identity "${resolvedLineId}" (already used by ${previous}); assign distinct binding ids`);
+        } else {
+          resolvedLineIds.set(resolvedLineId, bindingPath);
+        }
+      }
       validateCompat(binding.compat, effectiveApi, `${bindingPath}.compat`, errors, warnings);
       validateThinkingLevelMap(binding.thinkingLevelMap, `${bindingPath}.thinkingLevelMap`, errors);
       validateBindingAccounts(

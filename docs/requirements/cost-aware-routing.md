@@ -2,7 +2,7 @@
 
 - 状态：accepted
 - 讨论日期：2026-08-13
-- 最近更新：2026-09-15（阶段 B、C 第一批及阶段 D 第一批账号/线路分层已实现）
+- 最近更新：2026-09-18（遗漏修复、验收覆盖与延期范围已收口）
 - 适用范围：pi-switch 自动选路、`failover` 与 `balance`
 - 关联策略：[`../plans/cost-aware-routing-strategy.md`](../plans/cost-aware-routing-strategy.md)
 
@@ -12,7 +12,7 @@ pi-switch 通过多线路自动切换提高可用性，但跨 Provider、endpoin
 
 本地会话不会因切换而丢失，模型仍能收到上下文。本需求关注的是上游缓存命中和重复计算成本，而不是会话记忆丢失。
 
-当前 `balance` 按请求轮询，长会话会在多条线路间交替，容易持续破坏缓存亲和性。当前错误分类已能阻止部分不合理切换，但决策仍主要是“错误类别是否允许 failover”的布尔判断，无法表达账号优先、成本风险和请求阶段。
+历史版本的 `balance` 按请求轮询；当前实现默认使用会话级稳定分配，只有显式设置 `balanceScope: "request"` 才恢复逐请求轮询。错误决策、账号优先、成本风险和请求阶段已由结构化决策层表达。
 
 ## 2. 目标
 
@@ -75,7 +75,7 @@ pi session ID + alias
 - TUI、RPC、print 和内存会话使用统一语义；
 - `session_start` 初始化或恢复状态，`session_shutdown` 清理运行时状态并 flush 统计。
 
-首个实现允许只维护进程内亲和映射。若后续需要跨进程重启或遵循 `/tree` 分支恢复亲和状态，应优先使用 pi Custom Entry 持久化；Custom Entry 不进入模型上下文，不应另建独立 `affinity.json`。
+当前使用 pi Custom Entry 持久化亲和记录；`/resume` 和 `/tree` 分支按 Session ID 哈希恢复，Custom Entry 不进入模型上下文，也不另建独立 `affinity.json`。独立进程重启的宿主级 E2E 仍 deferred，见 [`../decisions/0007-deferred-cache-domain-and-host-e2e.md`](../decisions/0007-deferred-cache-domain-and-host-e2e.md)。
 
 ### 5.3 `balance` 默认采用会话级均衡
 
@@ -219,7 +219,7 @@ pi-switch 不自行拼装各协议的缓存字段。未明确支持相关参数�
 
 ## 8. 可观测性要求
 
-每次 attempt 应记录或可诊断：
+每次 attempt 应记录或可诊断（HTTP 状态、Retry-After、完整 FailureDecision 和 timeout 阶段已在阶段 E 接入 `stats.json` 与 `/switch status`）：
 
 - alias、binding/line、账号；
 - pi 上下文 Token 估计及其是否可靠；
@@ -240,16 +240,16 @@ pi-switch 不自行拼装各协议的缓存字段。未明确支持相关参数�
 4. 粘性线路故障并成功切换后，当前 session 后续请求继续使用新线路。（已完成：阶段 A）
 5. Abort、context overflow、明确 invalid request 和已提交内容后的错误不会触发新 attempt。（已完成：阶段 C）
 6. 账号级 401/429 在有备用账号时优先切换同 binding 账号。（已完成：阶段 D 第一批）
-7. 网络建连错误可在预算内自动切换线路。
+7. 网络建连错误可在预算内自动切换线路。（已完成：阶段 E 网络 failover 集成验证）
 8. 高成本错误根据成本偏好和预算产生不同决策。（已完成：阶段 C 第一批）
 9. `maxAttempts` 和高成本切换预算能阻止无限或过多重试。（已完成：阶段 C 第一批）
-10. Circuit Breaker 打开的线路不会被选为当前请求的初始线路。
-11. 自动化测试覆盖上述行为以及配置重载、线路删除和 session 结束后的亲和状态清理。（账号范围与账号亲和已覆盖；其余场景持续补齐）
-12. 用户文档明确说明跨线路缓存不可保证、自动切换可能重复计费。
+10. Circuit Breaker 打开的线路不会被选为当前请求的初始线路。（已完成：阶段 E 集成验证）
+11. 自动化测试覆盖上述行为以及配置重载、线路删除和 session 结束后的亲和状态清理。（核心路由、错误硬停止和 balance 分布已覆盖；真实 pi 生命周期 E2E 仍待宿主环境）
+12. 用户文档明确说明跨线路缓存不可保证、自动切换可能重复计费。（已完成：README 与安装指南）
 13. AliasProvider 转发不会丢失 `options.sessionId`、`cacheRetention` 和目标模型 `compat`，并有协议级回归测试。
 14. 成本决策能接收 pi 的上下文用量；用量未知时采用明确的保守语义。（已完成：阶段 B/C 第一批）
 15. 统计能记录上游实际 `cacheRead`、`cacheWrite` 和 cost；首版不以这些历史数据自动改变线路选择。
-16. `/resume` 能恢复稳定亲和语义，`/new`、`/fork`、`/clone` 按新 Session ID 重新初选。（已完成：阶段 A，pi 自然行为）
+16. `/resume` 能恢复稳定亲和语义，`/new`、`/fork`、`/clone` 按新 Session ID 重新初选。（已完成：阶段 E Custom Entry 分支回归验证）
 
 ## 10. 兼容与迁移
 
@@ -258,13 +258,13 @@ pi-switch 不自行拼装各协议的缓存字段。未明确支持相关参数�
 - 现有按请求轮询的 `balance` 属于用户可见行为；迁移为会话级均衡时必须更新 README、安装指南和 CHANGELOG。
 - 如需兼容旧行为，可提供显式 `balanceScope: "request"`，但新配置默认应为 `session`。
 
-## 11. 待确认事项
+## 11. 已决策与延期事项
 
 1. 亲和键已确定以 pi Session ID + alias 为基础；是否还加入配置 generation 仅用于失效控制，不能替代 pi Session ID。
-2. 首版采用内存亲和映射；何时升级为 pi Custom Entry 以支持重启和 `/tree` 分支恢复？（pi 侧接口已确认：`pi.appendEntry(customType, data)` 写入不进入模型上下文的 Custom Entry，`ctx.sessionManager.getBranch()` 读取）
+2. Custom Entry 已用于 `/resume` 和 `/tree` 分支亲和恢复；独立进程重启的真实 pi E2E deferred，等待隔离的 pi Session fixture。
 3. `maxAttempts`、高成本预算和成本偏好的默认值。（已确定：`maxAttempts=2`、`maxHighCostFailovers=1`、`failureCostPolicy=balanced`、`failoverOnUnknown=false`）
-4. 403 与 timeout 能否从当前 transport 获得足够阶段信息。
-5. 是否在首版开放用户声明 `cacheDomain`，以及如何防止错误声明造成误导。
-6. 配置重载后应保留仍有效的亲和映射，还是全部清空。
-7. 哪些 Provider/compat 组合允许在 UI 中开放 `cacheRetention` 和 session-affinity 选项？（各 transport 的实际前提已核实，见 [`../architecture/pi-native-passthrough.md`](../architecture/pi-native-passthrough.md)；尚需决定开放范围与默认值）
-8. `cacheRead` / `cacheWrite` 的 Provider 口径不同，跨线路展示时如何标注不可直接比较？
+4. 403 与 timeout 的当前 transport 阶段信息已确认；更细 DNS/TLS/首 Token 事件仍不伪造。
+5. `cacheDomain` 暂不开放；等待可验证的 provider/transport 共享缓存契约和误配检测设计。
+6. 配置重载会重建运行时并从当前 session branch 恢复当前会话的有效亲和；其他未恢复会话的内存映射会清空。
+7. TUI 暂不复制 `cacheRetention` 和 session-affinity 开关；继续透传 pi 原生选项，待 transport 能力矩阵评审后再决定。
+8. `cacheRead` / `cacheWrite` 仍按 provider Usage 口径展示，UI 不做跨线路严格可比承诺；后续若增加聚合视图再单独定义归一化。

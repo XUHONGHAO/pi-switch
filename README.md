@@ -172,7 +172,7 @@ pi -p "你好，请介绍一下自己" --model pi-switch/gpt5 -e ./src/index.ts
 |---|---|
 | `/switch` | 打开模型别名选择器 |
 | `/switch <alias>` | 直接切换到指定别名 |
-| `/switch status` | 查看当前模型、实际线路、账号、延迟，以及上下文、缓存读写、费用和亲和命中统计 |
+| `/switch status` | 查看当前模型、实际线路、账号、延迟、上下文/缓存/费用/亲和统计，以及最近一次故障决策诊断 |
 | `/switch providers` | 查看所有别名及其线路 |
 | `/switch check` | 检查配置引用、Key 池和 Circuit Breaker 状态 |
 | `/switch probe` | 主动探测 Provider 的模型接口和响应延迟 |
@@ -216,7 +216,7 @@ pi-switch 支持为模型配置思考级别映射，让你可以使用 `Shift+Ta
 | `failover` | 在产生内容前失败时自动尝试下一条线路，切换后会话粘住新线路 | 优先保障可用性 |
 | `balance` | 会话级负载均衡（默认 `balanceScope: "session"`），每个 pi 会话分配到一条线路并保持粘性，优化缓存命中率；可设为 `"request"` 恢复逐请求轮询 | 多线路分摊负载 |
 
-> 如果上游已经输出内容，pi-switch 不会再切换线路，以免把不同响应拼接在一起。会话亲和在 `/new`、`/fork`、`/clone` 时重置，`/resume` 时恢复。
+> 如果上游已经输出内容，pi-switch 不会再切换线路，以免把不同响应拼接在一起。会话亲和在 `/new`、`/fork`、`/clone` 时重置，`/resume` 时恢复。跨 Provider、endpoint 或账号切换不保证共享 Prompt Cache，自动切换也可能造成重复计费。
 
 ## 配置文件
 

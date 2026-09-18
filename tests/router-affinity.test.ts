@@ -62,15 +62,11 @@ describe("Router session affinity (Phase A)", () => {
     expect(sel1.binding.provider).toBe(sel2.binding.provider);
     expect(sel2.binding.provider).toBe(sel3.binding.provider);
 
-    // Different sessions get their own deterministic bindings.
-    const selB = router.select("test", bindings, SESSION_B);
-    const selC = router.select("test", bindings, SESSION_C);
-
-    expect(selB.binding.provider).toBeDefined();
-    expect(selC.binding.provider).toBeDefined();
-
-    // Rendezvous should ideally distribute, but we only assert determinism here.
-    // (Hash collisions are possible, so we don't enforce distinct providers.)
+    // A stable set of independent sessions should exercise more than one line.
+    const selectedProviders = new Set(
+      Array.from({ length: 32 }, (_, index) => router.select("test", bindings, `session-${index}`).binding.provider),
+    );
+    expect(selectedProviders.size).toBeGreaterThan(1);
   });
 
   it("same session sticks to the same binding after affinity is set", () => {
@@ -150,6 +146,26 @@ describe("Router session affinity (Phase A)", () => {
     const selection = router.select("test", bindings, SESSION_A);
     expect(selection.binding.lineId).toBe("stable-second");
     expect(selection.affinityHit).toBe(true);
+  });
+
+  it("uses the latest persisted entry for a resumed session and isolates new sessions", () => {
+    const dir = writeConfig({ strategy: "failover" });
+    tempDirs.push(dir);
+    const store = new ConfigStore(dir);
+    const router = new Router(store);
+    const first = { ...binding("first", "gpt"), lineId: "stable-first" };
+    const second = { ...binding("second", "gpt"), lineId: "stable-second" };
+
+    router.restoreAffinity(SESSION_A, "test", "stable-first");
+    router.restoreAffinity(SESSION_A, "test", "stable-second");
+
+    const resumed = router.select("test", [first, second], SESSION_A);
+    expect(resumed.binding.lineId).toBe("stable-second");
+    expect(resumed.affinityHit).toBe(true);
+
+    const forked = router.select("test", [first, second], SESSION_B);
+    expect(forked.binding.lineId).toBe("stable-first");
+    expect(forked.affinityHit).toBe(false);
   });
 
   it("restores persisted account identity when available", () => {

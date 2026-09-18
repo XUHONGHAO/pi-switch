@@ -11,7 +11,7 @@ import { ModelResolver } from "../src/model/resolver";
 import { Router } from "../src/router/router";
 import { HealthManager, lineKey, parseRetryAfterHeader, parseRetryAfterMs } from "../src/router/health";
 import { buildModelDefinition, filterModels } from "../src/provider/openai";
-import { formatAttemptUsage, mergeStats, StatsManager, type StatsData } from "../src/stats/manager";
+import { formatAttemptDiagnostics, formatAttemptUsage, mergeStats, StatsManager, type StatsData } from "../src/stats/manager";
 import type { ResolvedBinding } from "../src/model/resolver";
 import { inferApi, isSupportedApi } from "../src/provider/transport";
 import { cascadeDeleteProvider, providerDependents, registerConfigCommand } from "../src/ui/config";
@@ -73,15 +73,23 @@ describe("error classification", () => {
     expect(decideFailure({ ...baseDecision, category: "auth", status: 403, hasAlternativeAccount: false })).toMatchObject({
       action: "stop", reasonCode: "unknown-risk-conservative", costRisk: "unknown",
     });
-    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90 })).toMatchObject({ action: "switch-route", costRisk: "high" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, phase: "awaiting-response" })).toMatchObject({ action: "switch-route", costRisk: "high" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, phase: "connecting" })).toMatchObject({ action: "switch-route", costRisk: "low" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, phase: "awaiting-response", status: 504 })).toMatchObject({ action: "switch-route", costRisk: "high" });
     expect(decideFailure({ ...baseDecision, category: "unknown" })).toMatchObject({ action: "stop", reasonCode: "unknown-risk-conservative" });
+    expect(decideFailure({ ...baseDecision, category: "aborted" })).toMatchObject({ action: "stop", reasonCode: "abort-requested" });
+    expect(decideFailure({ ...baseDecision, category: "context-overflow" })).toMatchObject({ action: "stop", reasonCode: "context-overflow" });
+    expect(decideFailure({ ...baseDecision, category: "invalid-request" })).toMatchObject({ action: "stop", reasonCode: "invalid-request" });
     expect(decideFailure({ ...baseDecision, category: "network", attemptsUsed: 2 })).toMatchObject({ action: "stop", reasonCode: "attempt-budget-exhausted" });
     expect(decideFailure({ ...baseDecision, category: "network", contentCommitted: true })).toMatchObject({ action: "stop", reasonCode: "content-already-committed" });
   });
 
   it("applies economy and high-cost budgets", () => {
-    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, policy: "economy" })).toMatchObject({ action: "stop", reasonCode: "economy-policy-limit" });
-    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, highCostFailoversUsed: 1 })).toMatchObject({ action: "stop", reasonCode: "high-cost-budget-exhausted" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, phase: "awaiting-response", policy: "economy" })).toMatchObject({ action: "stop", reasonCode: "economy-policy-limit" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, phase: "awaiting-response", highCostFailoversUsed: 1 })).toMatchObject({ action: "stop", reasonCode: "high-cost-budget-exhausted" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextTokens: 120_000, contextRatio: 90, phase: "awaiting-response", policy: "availability" })).toMatchObject({ action: "switch-route", costRisk: "high" });
+    expect(decideFailure({ ...baseDecision, category: "timeout", contextUsageReliable: false, contextTokens: undefined, contextRatio: undefined, phase: "awaiting-response" })).toMatchObject({ action: "stop", reasonCode: "unknown-risk-conservative", costRisk: "unknown" });
+    expect(decideFailure({ ...baseDecision, category: "unknown", failoverOnUnknown: true })).toMatchObject({ action: "switch-route", reasonCode: "route-failover-allowed", costRisk: "unknown" });
   });
 
   it("validates cost-aware routing settings", () => {
@@ -105,6 +113,7 @@ describe("error classification", () => {
     ["429 Too Many Requests", "rate-limit"],
     ["request timed out", "timeout"],
     ["503 Service Unavailable", "server"],
+    ["Connection error.", "network"],
     ["400 Bad Request", "invalid-request"],
     ["ECONNREFUSED", "network"],
   ] as const)("classifies %s", (message, category) => {
@@ -232,15 +241,24 @@ describe("v0.2 stats merging", () => {
       alias: "gpt", lineId: "line-a", provider: "p", success: true, durationMs: 10,
       contextTokens: 12_000, contextPercent: 30, contextUsageReliable: true, affinityHit: true,
       phase: "streaming", attemptNumber: 2, maxAttempts: 2, budgetRemaining: 0, highCostFailoversUsed: 0,
-      decision: { action: "switch-route", scope: "route", costRisk: "medium", reasonCode: "route-failover-allowed", reason: "test" },
+      status: 503, retryAfterMs: 1500,
+      decision: { action: "switch-route", scope: "route", costRisk: "medium", reasonCode: "route-failover-allowed", reason: "test", cooldownMs: 30000, openCircuit: true },
       usage: {
         input: 100, output: 20, cacheRead: 80, cacheWrite: 10, totalTokens: 200,
         cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 },
       },
     });
     const attempt = stats.lineAttempts("line-a");
-    expect(attempt).toMatchObject({ contextSamples: 1, affinityHits: 1, usageSamples: 1, cacheReadTokens: 80, cacheWriteTokens: 10, totalCost: 0.33, lastAction: "switch-route", lastReasonCode: "route-failover-allowed" });
+    expect(attempt).toMatchObject({ contextSamples: 1, affinityHits: 1, usageSamples: 1, cacheReadTokens: 80, cacheWriteTokens: 10, totalCost: 0.33, lastStatus: 503, lastRetryAfterMs: 1500, lastAction: "switch-route", lastReasonCode: "route-failover-allowed", lastReason: "test", lastCooldownMs: 30000, lastOpenCircuit: true });
     expect(formatAttemptUsage(attempt)).toContain("读缓存 80");
+    expect(formatAttemptDiagnostics(attempt)).toContain("HTTP 503");
+    expect(formatAttemptDiagnostics(attempt)).toContain("已打开熔断");
+    stats.recordAttempt({
+      alias: "gpt", lineId: "line-a", provider: "p", success: true, durationMs: 5,
+      phase: "streaming",
+    });
+    expect(stats.lineAttempts("line-a")).toMatchObject({ attempts: 2, lastStatus: undefined, lastReasonCode: undefined, lastAction: undefined });
+    expect(formatAttemptDiagnostics(stats.lineAttempts("line-a"))).not.toContain("route-failover-allowed");
     stats.flush();
     rmSync(dir, { recursive: true, force: true });
   });
@@ -552,6 +570,36 @@ describe("v0.3.2 correctness", () => {
     });
   });
 
+  it("keeps the last valid config when an external reload is invalid", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-switch-reload-rollback-"));
+    tempDirs.push(dir);
+    writeFileSync(join(dir, "providers.json"), JSON.stringify({
+      p: { type: "openai", baseUrl: "https://example.com/v1", apiKey: "test" },
+    }));
+    writeFileSync(join(dir, "models.json"), JSON.stringify({
+      gpt: { providers: [{ provider: "p", model: "gpt" }] },
+    }));
+    const store = new ConfigStore(dir);
+    expect(store.get().providers.p.baseUrl).toBe("https://example.com/v1");
+
+    writeFileSync(join(dir, "routing.json"), JSON.stringify({ maxAttempts: 0 }));
+    expect(() => store.reload()).toThrow(/invalid configuration/);
+    expect(store.get().providers.p.baseUrl).toBe("https://example.com/v1");
+    expect(store.get().routing.maxAttempts).toBeUndefined();
+
+    writeFileSync(join(dir, "routing.json"), "{}\n");
+    writeFileSync(join(dir, "providers.json"), "{invalid json\n");
+    expect(() => store.reload()).toThrow(/Failed to load/);
+    expect(store.get().providers.p.baseUrl).toBe("https://example.com/v1");
+
+    writeFileSync(join(dir, "providers.json"), JSON.stringify({
+      p: { type: "openai", baseUrl: "https://example.com/v1", apiKey: "test" },
+    }));
+    writeFileSync(join(dir, "stats.json"), "{invalid stats\n");
+    expect(() => store.reload()).not.toThrow();
+    expect(store.get().providers.p.baseUrl).toBe("https://example.com/v1");
+  });
+
   it("cascades provider deletion across accounts and alias bindings", () => {
     const cfg = config({
       providers: {
@@ -618,5 +666,33 @@ describe("v0.3.2 correctness", () => {
       },
     }));
     expect(result.errors.some((error) => error.includes("input"))).toBe(true);
+  });
+
+  it("rejects duplicate implicit line identities", () => {
+    const result = validateConfig(config({
+      providers: { p: { type: "openai", baseUrl: "https://example.com/v1" } },
+      models: {
+        duplicate: {
+          providers: [
+            { provider: "p", model: "gpt" },
+            { provider: "p", model: "gpt" },
+          ],
+        },
+      },
+    }));
+    expect(result.errors.some((error) => error.includes("duplicate resolved line identity"))).toBe(true);
+  });
+
+  it("falls back from an affinity entry when its line is removed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-switch-affinity-removal-"));
+    tempDirs.push(dir);
+    const store = new ConfigStore(dir);
+    const router = new Router(store);
+    const removed = { ...binding("removed", "gpt"), lineId: "removed-line" };
+    const remaining = { ...binding("remaining", "gpt"), lineId: "remaining-line" };
+    router.restoreAffinity("session-remove", "gpt", removed.lineId);
+    const selection = router.select("gpt", [remaining], "session-remove");
+    expect(selection.binding.lineId).toBe("remaining-line");
+    expect(selection.affinityHit).toBe(false);
   });
 });

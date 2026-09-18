@@ -62,7 +62,7 @@ export function classifyError(message: string, aborted = false, failure?: Upstre
   if (/\b400\b|\b404\b|\b405\b|\b409\b|\b422\b|bad request|invalid (request|parameter|argument)/.test(value)) {
     return "invalid-request";
   }
-  if (/\beconn|\benet|\behost|\beai_again|fetch failed|network|socket|dns|connection (?:reset|refused)/.test(value)) {
+  if (/\beconn|\benet|\behost|\beai_again|fetch failed|network|socket|dns|connection (?:error|reset|refused)/.test(value)) {
     return "network";
   }
   return "unknown";

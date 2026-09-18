@@ -99,6 +99,8 @@ interface AttemptTelemetry {
   maxAttempts: number;
   budgetRemaining: number;
   highCostFailoversUsed: number;
+  status?: number;
+  retryAfterMs?: number;
 }
 
 /** Last routed request (for /switch status + turn-level stats). */
@@ -121,6 +123,10 @@ export interface RouteInfo {
   ok: boolean;
   /** Whether this request started on a persisted session-affine line. */
   affinityHit: boolean;
+  /** HTTP status observed from the settled upstream response, when available. */
+  status?: number;
+  /** Retry-After value observed from the settled upstream response, when available. */
+  retryAfterMs?: number;
   /** Context usage snapshot captured before this request. */
   contextTokens?: number;
   contextPercent?: number;
@@ -192,6 +198,7 @@ export class AliasProvider {
   /** Clear session affinity (called on session_shutdown). */
   clearSession(sessionId: string): void {
     this.router.clearSession(sessionId);
+    this.lastRoute = undefined;
   }
 
   /** Restore only entries belonging to this exact pi session. */
@@ -220,6 +227,7 @@ export class AliasProvider {
     this.router = new Router(this.store);
     this.accounts = new AccountManager(this.store);
     this.health = new HealthManager(this.store.get().routing);
+    this.lastRoute = undefined;
     this.pi.unregisterProvider(ALIAS_PROVIDER);
     return this.register();
   }
@@ -311,6 +319,8 @@ export class AliasProvider {
             maxAttempts,
             budgetRemaining: Math.max(0, maxAttempts - attemptsUsed),
             highCostFailoversUsed,
+            ...(responseMeta?.status !== undefined ? { status: responseMeta.status } : {}),
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
           });
 
           const chooseNextIndex = (action: FailureDecision["action"]): number | undefined => {
@@ -406,7 +416,9 @@ export class AliasProvider {
                   status: response.status,
                   headers: Object.fromEntries(response.headers.entries()),
                 };
-                phase = response.ok ? "awaiting-response" : phase;
+                // Any received HTTP response, including an error response,
+                // means the request passed the connection phase.
+                phase = "awaiting-response";
                 retryAfterMs = parseRetryAfterHeader(
                   response.headers.get("retry-after") ?? response.headers.get("Retry-After") ?? undefined,
                 );
@@ -533,6 +545,7 @@ export class AliasProvider {
             continue;
           }
           this.settleAttempt(model.id, target, false, attemptStart, ttftAt, "unknown", lastError, retryAfterMs, telemetry());
+          this.recordRoute(model.id, target, ttftAt, attemptStart, failovers, false, telemetry(), selection.affinityHit, lastDecision);
           break;
         }
 
@@ -656,6 +669,8 @@ export class AliasProvider {
         maxAttempts: telemetry.maxAttempts,
         budgetRemaining: telemetry.budgetRemaining,
         highCostFailoversUsed: telemetry.highCostFailoversUsed,
+        ...(telemetry.status !== undefined ? { status: telemetry.status } : {}),
+        ...(telemetry.retryAfterMs !== undefined ? { retryAfterMs: telemetry.retryAfterMs } : {}),
         ...(telemetry.usage ? { usage: telemetry.usage } : {}),
       } : {}),
     });
@@ -682,6 +697,8 @@ export class AliasProvider {
       failovers,
       ok,
       affinityHit,
+      ...(telemetry.status !== undefined ? { status: telemetry.status } : {}),
+      ...(telemetry.retryAfterMs !== undefined ? { retryAfterMs: telemetry.retryAfterMs } : {}),
       ...(telemetry.contextUsage.tokens !== undefined ? { contextTokens: telemetry.contextUsage.tokens } : {}),
       ...(telemetry.contextUsage.percent !== undefined ? { contextPercent: telemetry.contextUsage.percent } : {}),
       ...(telemetry.usage ? { usage: telemetry.usage } : {}),

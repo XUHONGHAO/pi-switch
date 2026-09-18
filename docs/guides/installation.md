@@ -377,7 +377,7 @@ pi> /switch status        # 查看当前线路与统计
 |------|------|
 | `/switch` | 打开模型选择器（TUI 下带线路描述） |
 | `/switch gpt5` | 直接切换模型 |
-| `/switch status` | 当前模型 + 线路 + 账号 + 延迟 + 统计 |
+| `/switch status` | 当前模型 + 线路 + 账号 + 延迟 + 成本统计 + 最近故障决策诊断 |
 | `/switch providers` | 列出所有别名及其线路/账号 |
 | `/switch check` | 静态检查 alias、Key 池和 Circuit Breaker（`test` 仍可作为兼容别名） |
 | `/switch probe` | 主动请求 Provider `/models`，检查连通性、HTTP 状态和延迟 |
@@ -386,7 +386,7 @@ pi> /switch status        # 查看当前线路与统计
 
 ```
 pi> /switch status
-Model: pi-switch/gpt5 · Provider: sub2api · Account: sub2api_backup · Latency: 2ms · 3 req · 100% ok · avg 3ms · 6 failover(s)
+Model: pi-switch/gpt5 · Provider: sub2api · Account: sub2api_backup · Latency: 2ms · 3 req · 100% ok · avg 3ms · 6 failover(s) · HTTP 503 · route-failover-allowed · medium
 ```
 
 ### 其他使用方式
@@ -436,9 +436,11 @@ pi> /config reload          # 外部改了 JSON 后热重载
 |------|------|----------|
 | `priority` | 固定使用最高优先级线路，失败不切换 | 官方 API 优先 |
 | `failover` | 按优先级依次尝试，线路在**产生内容前**失败自动切下一条 | 追求可用性 |
-| `balance` | 轮询所有线路，失败时继续轮转 | 多中转分摊负载 |
+| `balance` | 默认按 pi 会话在健康线路间稳定分配并保持粘性；设置 `balanceScope: "request"` 才逐请求轮询 | 多中转分摊负载并减少长会话缓存抖动 |
 
 故障切换是**分层**的：账号级 401/429 先切当前 binding 的其他账号；网络或线路级错误再切其他 binding。
+
+跨 Provider、endpoint 或账号切换不保证共享 Prompt Cache；原线路可能已经产生输入处理费用，因此自动 failover 仍可能造成重复计费。
 
 ```
 请求 pi-switch/gpt5
@@ -485,6 +487,8 @@ pi> /config reload          # 外部改了 JSON 后热重载
 - 粒度：**每次用户请求**（pi 自动重试不会重复计数）
 - 持久化：`stats.json`，2 秒防抖写盘 + 退出时强制落盘
 
+> `cacheRead`、`cacheWrite` 和费用来自上游 Usage；不同 Provider 的统计口径可能不同，不应直接横向比较。跨线路切换也不保证共享缓存，并可能产生重复计费。
+
 查看方式：
 
 ```
@@ -528,7 +532,7 @@ pi> /preset coding           # pi 原生命令，同样可用
 | 模型发现失败但不影响启动 | `GET {baseUrl}/models` 失败（地址不可达 / 不支持），静态 `models` 仍生效，日志有 warning |
 | 启动明显变慢 | 多个 Provider 同时做模型发现（每个最长 5s），可通过 `discoverModels: false` 关闭 |
 | 非交互模式（print/rpc）下 `/config` 只显示帮助 | 正常行为：对话框需要 TUI，请用 `pi -e ./src/index.ts` 进入交互模式 |
-| 修改配置后不生效 | 用 `/config reload` 或重启 pi（配置只在加载/重载时读取） |
+| 修改配置后不生效 | 先检查 `/config reload` 的校验错误；非法外部配置会保留上一份有效配置，再修正文件后重载 |
 | 请求失败但日志有 `failing over` 后仍报错 | 所有线路都失败，最终透传最后一条线路的真实错误 |
 | Windows 下命令行传 `/switch xxx` 被转成路径 | git-bash 的 MSYS 路径转换：用 `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'`（交互模式不受影响） |
 

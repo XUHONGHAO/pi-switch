@@ -1,8 +1,8 @@
 # 成本感知路由策略设计草案
 
-- 状态：in-progress（阶段 0、A、B、C 第一批及 D 第一批已完成）
+- 状态：in-progress（阶段 0、A、B、C 第一批、D 两批及 E 当前批已完成）
 - 日期：2026-08-13
-- 最近更新：2026-09-15（阶段 D 第一批：binding 账号范围、账号优先切换与账号亲和）
+- 最近更新：2026-09-18（遗漏修复、验收覆盖与延期范围已收口）
 - 对应需求：[`../requirements/cost-aware-routing.md`](../requirements/cost-aware-routing.md)
 - 已核实契约：[`../architecture/pi-native-passthrough.md`](../architecture/pi-native-passthrough.md)
 - 当前实现参考：`src/router/router.ts`、`src/errors/classify.ts`、`src/provider/alias.ts`
@@ -20,23 +20,23 @@
 
 策略只负责“从哪里开始”；亲和性负责“正常情况下继续用谁”；故障决策负责“出错后做什么”；预算负责“最多付出多少次重复请求成本”。
 
-## 2. 当前行为与差距
+## 2. 当前行为与历史差距
 
 当前实现：
 
-- `priority` 和 `failover` 总是从排序后的首个候选开始。
-- `balance` 使用进程内 alias 计数器按请求轮询。
-- `canFailoverFor()` 只返回布尔值。
-- 账号被展开成扁平候选，难以显式表达“先换账号、再换线路”。
-- 已有 `committed`、错误分类、`Retry-After`、Circuit Breaker 和 attempt 统计，可作为演进基础。
+- 历史版本的 `priority` 和 `failover` 从排序后的首个候选开始；当前仍保持该主线路语义并增加会话亲和。
+- 历史版本的 `balance` 使用进程内 alias 计数器按请求轮询；当前默认会话级 rendezvous，`balanceScope: "request"` 保留兼容行为。
+- 历史版本的 `canFailoverFor()` 只返回布尔值；当前由 `FailureDecision` 表达动作、作用域、风险和原因。
+- 历史版本账号被展开成扁平候选；当前保留 binding → account 分组并优先同 binding 账号。
+- `committed`、错误分类、`Retry-After`、Circuit Breaker、attempt 统计和诊断已形成当前实现基础。
 
-主要差距：
+以下是本计划启动时的差距，当前实现已完成对应项目：
 
-- 无 session 路由键与粘性状态；
-- 无失败作用域、成本风险、请求阶段和尝试预算；
-- `balance` 对长会话缓存不友好；
-- 未知错误和高成本超时可能与低风险建连失败采用相同切换路径；
-- 尚未用 pi 的上下文用量和真实 cache Usage 支撑成本评估与观测；
+- ~~无 session 路由键与粘性状态~~（阶段 A/E 已完成）；
+- ~~无失败作用域、成本风险、请求阶段和尝试预算~~（阶段 C/E 已完成）；
+- ~~`balance` 对长会话缓存不友好~~（阶段 A 已改为默认会话级）；
+- ~~未知错误和高成本超时可能与低风险建连失败采用相同切换路径~~（阶段 C/E 已区分）；
+- ~~尚未用 pi 的上下文用量和真实 cache Usage 支撑成本评估与观测~~（阶段 B 已完成）；
 - ~~尚未以回归测试证明别名转发完整保留 `sessionId`、`cacheRetention` 和目标模型 `compat`~~（阶段 0 已闭环）；
 - 常见中转站在默认 `cacheRetention: short` 且未声明 `compat` 时，上游收不到任何缓存键或亲和 Header——这是配置暴露问题，不是转发缺陷。
 
@@ -148,8 +148,8 @@ interface AffinityEntry {
 - 成功 failover 后更新为新线路。
 - 当前线路仍存在且健康时持续复用。
 - session 结束时清理内存状态。
-- 配置重载时删除目标已不存在或身份不兼容的映射。
-- 首版只做进程内状态；跨重启或 `/tree` 分支恢复优先升级为 pi Custom Entry，不建立独立亲和状态文件。
+- 配置重载时重建 Router，并从当前 Session branch 恢复仍有效的亲和映射；无效线路会自然回退到初始选择。
+- 使用 pi Custom Entry 记录亲和变化，不建立独立亲和状态文件；独立进程重启 E2E 按 ADR 0007 deferred。
 
 ### 5.2 binding 与账号亲和
 
@@ -162,11 +162,11 @@ interface AffinityEntry {
 
 ### 5.3 pi 生命周期集成
 
-- `session_start`：读取 pi Session ID，初始化内存亲和上下文；未来可从当前 `getBranch()` 的最新 Custom Entry 恢复。
+- `session_start`：读取 pi Session ID，初始化内存亲和上下文，并从当前 `getBranch()` 的最新有效 Custom Entry 恢复。
 - `session_shutdown`：清理运行时引用并 flush 统计；若使用 Custom Entry，持久化记录仍留在 session 中。
 - `/resume`：相同 Session ID 应恢复稳定选路。
 - `/new`、`/fork`、`/clone`：新 Session ID 重新初选。
-- 配置重载：仅保留仍指向有效 `lineId` 的映射，具体失效规则待确认。
+- 配置重载：当前会清理旧 Router 内存状态，再从当前 branch 恢复有效 `lineId`；其他未恢复 Session 重新初选。
 
 ## 6. pi-ai 缓存与上游亲和透传
 
@@ -418,7 +418,7 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] 将阶段 B 的当前上下文成本作为决策输入。
 - [x] 替换布尔 failover 判断并补齐错误矩阵单元测试。
 
-阶段 C 第一批已完成；账号/线路分层第一批已在阶段 D 完成，显式 `cacheDomain` 和更细的 timeout 阶段识别仍属于阶段 E。
+阶段 C 第一批已完成；账号/线路分层两批和 timeout 阶段识别已在阶段 D/E 完成，显式 `cacheDomain` 仍待评审。
 
 ### 阶段 D：账号/线路分层
 
@@ -426,7 +426,7 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] 401/429 优先同 binding 换账号，并让成功切换后的账号参与会话亲和。
 - [x] 补充账号范围校验、候选分组、账号亲和恢复和 401 集成测试。
 
-阶段 D 第一批已完成。后续仍可在本阶段扩展 403 的更细作用域判定、账号配额策略和更丰富的账号诊断，但不改变当前 binding 优先级与账号优先级语义。
+阶段 D 第一批已完成；403 基础作用域判定已在第二批完成。账号配额策略属于 ADR 0007 的 deferred 范围，不改变当前 binding 优先级与账号优先级语义。
 
 阶段 D 第二批：
 
@@ -436,10 +436,19 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 
 ### 阶段 E：增强决策与显式缓存域
 
-- 增加完整决策原因和成本风险诊断。
+- [x] 增加完整决策原因和成本风险诊断：AttemptStats 与 `/switch status` 展示 HTTP 状态、错误阶段、作用域、动作、风险、原因、冷却、熔断和尝试预算。
 - 评审后再开放 `cacheDomain`。
-- 根据实际 transport 能力细分 timeout 阶段。
-- 评估使用 pi Custom Entry 恢复重启和 `/tree` 分支下的亲和状态。
+- [x] 根据实际 transport 能力细分 timeout 阶段：收到任意 HTTP 响应后进入 `awaiting-response`；连接前 timeout 保持低风险，响应后 timeout 按上下文用量评估。
+- [x] 评估并验证 pi Custom Entry 恢复 `/resume` 与 `/tree` 分支亲和状态；只按 Session ID 哈希匹配，新的 `/new`、`/fork`、`/clone` Session 不继承旧记录。
+
+阶段 E 当前批已完成；`cacheDomain`、账号配额、TUI 原生缓存开关和独立进程重启 E2E 按 ADR 0007 deferred。
+
+后续明确范围：
+
+- `cacheDomain`：待确认用户声明语义、候选排序和误配提示后再开放。
+- 账号配额策略：当前只按账号优先级与故障结果切换，不读取或预测供应商剩余额度。
+- `cacheRetention` / session-affinity UI：当前继续透传 pi 原生选项，由 pi/compat 决定能力；待 transport 能力矩阵评审后再开放配置入口。
+- 独立进程重启 E2E：需要真实 pi session branch fixture，当前单元/集成测试已覆盖哈希匹配、最新记录覆盖和新 Session 隔离。
 
 ## 15. 测试策略
 
@@ -448,20 +457,24 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] `sessionId`、`cacheRetention` 和目标模型 `compat` 穿过 AliasProvider 到原生 transport；
 - [x] 支持的 transport 按 compat 生成缓存键、缓存控制或上游亲和信息；
 - [x] 同一 pi Session ID/alias 的亲和命中；
-- 不同 session 的 balance 分配；
-- failover 新会话仍从主线路开始；
-- 切换后不立即 failback；
-- Abort、overflow、400 和已提交内容硬停止；
+- [x] 不同 session 的 balance 分配；
+- [x] failover 新会话仍从主线路开始；
+- [x] 切换后不立即 failback；
+- [x] Abort、overflow、400 和已提交内容硬停止；
 - [x] 401、429 同 binding 账号优先；
 - [x] binding `accounts` 范围校验、账号候选分组和账号级亲和恢复；
-- 网络失败跨线路；
-- 高成本 timeout 在三种成本策略下的差异；
-- attempt 预算耗尽；
-- open circuit 与 affinity 冲突；
-- 配置重载移除粘性线路；
-- context usage 已知与未知时的成本风险差异；
-- Assistant Usage 的 cacheRead/cacheWrite/cost 被正确统计；
-- 不输出 Secret 和原始 Session ID。
+- [x] 网络失败跨线路；
+- [x] 高成本 timeout 在三种成本策略下的差异；
+- [x] attempt 预算耗尽；
+- [x] open circuit 与 affinity 冲突；
+- [x] 配置重载移除粘性线路；（Router/ConfigStore 已覆盖，真实 index 生命周期 E2E 按 ADR 0007 deferred）
+- [x] context usage 已知与未知时的成本风险差异；
+- [x] Assistant Usage 的 cacheRead/cacheWrite/cost 被正确统计；
+- [x] HTTP 状态、Retry-After、请求阶段和完整 FailureDecision 可在 attempt 统计与 `/switch status` 中诊断；
+- [x] timeout 在 `connecting` 与 `awaiting-response` 阶段采用不同成本风险，并有长上下文回归测试；
+- [x] Custom Entry 的最新记录覆盖、`/resume` 恢复和新 Session 隔离有回归覆盖；
+- [x] Abort、400、context overflow 决策和已提交内容硬停止有回归覆盖；
+- [x] 不输出 Secret 和原始 Session ID。
 
 ## 16. 风险与取舍
 
@@ -481,6 +494,6 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 2. ~~已通过测试确认 pi Session ID、`cacheRetention` 和目标模型 `compat` 的透传行为~~（阶段 0 已完成）；
 3. ~~已确认 `ctx.getContextUsage()` 在当前 pi 版本中的实际字段与未知值语义~~（`{ tokens: number | null, contextWindow, percent: number | null }`，整体可能为 `undefined`）；
 4. ~~已确认从哪一事件/消息读取最终 Assistant Usage~~（`done` 事件的 `message.usage`，或宿主 `message_end` 事件）；
-5. 配置字段命名和默认值已评审；
-6. 是否需要 ADR 记录 balance 语义变更；
-7. 用户可见迁移和 CHANGELOG 方案已确定。
+5. [x] 配置字段命名和默认值已评审；
+6. [x] balance 语义变更和延期范围已记录 ADR；
+7. [x] 用户可见迁移和 CHANGELOG 方案已确定。

@@ -39,11 +39,16 @@ export interface AttemptStats {
   lastAttemptAt?: number;
   lastError?: string;
   lastCategory?: ErrorCategory;
+  lastStatus?: number;
+  lastRetryAfterMs?: number;
   lastPhase?: AttemptPhase;
   lastFailureScope?: FailureScope;
   lastAction?: FailureAction;
   lastCostRisk?: CostRisk;
   lastReasonCode?: string;
+  lastReason?: string;
+  lastCooldownMs?: number;
+  lastOpenCircuit?: boolean;
   lastAttemptNumber?: number;
   lastMaxAttempts?: number;
   lastBudgetRemaining?: number;
@@ -80,6 +85,8 @@ export interface AttemptEntry {
   durationMs: number;
   category?: ErrorCategory;
   error?: string;
+  status?: number;
+  retryAfterMs?: number;
   contextTokens?: number;
   contextPercent?: number;
   contextUsageReliable?: boolean;
@@ -208,14 +215,27 @@ export class StatsManager {
       if (entry.ttftMs !== undefined) { stats.totalTtftMs += entry.ttftMs; stats.ttftSamples += 1; }
       stats.totalDurationMs += entry.durationMs;
       stats.lastAttemptAt = now;
-      if (entry.error) stats.lastError = entry.error;
-      if (entry.category) stats.lastCategory = entry.category;
-      if (entry.phase) stats.lastPhase = entry.phase;
+      stats.lastError = entry.error;
+      stats.lastCategory = entry.category;
+      stats.lastStatus = entry.status;
+      stats.lastRetryAfterMs = entry.retryAfterMs;
+      stats.lastPhase = entry.phase;
       if (entry.decision) {
         stats.lastFailureScope = entry.decision.scope;
         stats.lastAction = entry.decision.action;
         stats.lastCostRisk = entry.decision.costRisk;
         stats.lastReasonCode = entry.decision.reasonCode;
+        stats.lastReason = entry.decision.reason;
+        stats.lastCooldownMs = entry.decision.cooldownMs;
+        stats.lastOpenCircuit = entry.decision.openCircuit;
+      } else {
+        stats.lastFailureScope = undefined;
+        stats.lastAction = undefined;
+        stats.lastCostRisk = undefined;
+        stats.lastReasonCode = undefined;
+        stats.lastReason = undefined;
+        stats.lastCooldownMs = undefined;
+        stats.lastOpenCircuit = undefined;
       }
       if (entry.attemptNumber !== undefined) stats.lastAttemptNumber = entry.attemptNumber;
       if (entry.maxAttempts !== undefined) stats.lastMaxAttempts = entry.maxAttempts;
@@ -358,11 +378,16 @@ function mergeAttempt(target: Record<string, AttemptStats>, delta: Record<string
       out.lastAttemptAt = normalizedAdd.lastAttemptAt;
       out.lastError = normalizedAdd.lastError;
       out.lastCategory = normalizedAdd.lastCategory;
+      out.lastStatus = normalizedAdd.lastStatus;
+      out.lastRetryAfterMs = normalizedAdd.lastRetryAfterMs;
       out.lastPhase = normalizedAdd.lastPhase;
       out.lastFailureScope = normalizedAdd.lastFailureScope;
       out.lastAction = normalizedAdd.lastAction;
       out.lastCostRisk = normalizedAdd.lastCostRisk;
       out.lastReasonCode = normalizedAdd.lastReasonCode;
+      out.lastReason = normalizedAdd.lastReason;
+      out.lastCooldownMs = normalizedAdd.lastCooldownMs;
+      out.lastOpenCircuit = normalizedAdd.lastOpenCircuit;
       out.lastAttemptNumber = normalizedAdd.lastAttemptNumber;
       out.lastMaxAttempts = normalizedAdd.lastMaxAttempts;
       out.lastBudgetRemaining = normalizedAdd.lastBudgetRemaining;
@@ -399,6 +424,31 @@ export function formatAttemptUsage(stats: AttemptStats | undefined): string {
   const cacheBase = stats.inputTokens + stats.cacheReadTokens;
   const cacheRate = cacheBase > 0 ? ` · 缓存读取占比 ${Math.round((stats.cacheReadTokens / cacheBase) * 100)}%` : "";
   return `${context} · 读缓存 ${formatTokens(stats.cacheReadTokens)} · 写缓存 ${formatTokens(stats.cacheWriteTokens)}${cacheRate} · 费用 $${stats.totalCost.toFixed(4)} · 亲和命中 ${stats.affinityHits}/${stats.attempts}`;
+}
+
+export function formatAttemptDiagnostics(stats: AttemptStats | undefined): string {
+  if (!stats || stats.attempts === 0) return "暂无故障诊断";
+  const phaseLabels: Record<AttemptPhase, string> = {
+    "resolving-auth": "解析认证",
+    connecting: "建立连接",
+    "awaiting-response": "等待响应",
+    streaming: "响应流",
+  };
+  const parts: string[] = [];
+  if (stats.lastStatus !== undefined) parts.push(`HTTP ${stats.lastStatus}`);
+  if (stats.lastCategory) parts.push(`类别 ${stats.lastCategory}`);
+  if (stats.lastPhase) parts.push(`阶段 ${phaseLabels[stats.lastPhase]}`);
+  if (stats.lastAction && stats.lastCostRisk) parts.push(`决策 ${stats.lastAction}/${stats.lastCostRisk}`);
+  if (stats.lastFailureScope) parts.push(`作用域 ${stats.lastFailureScope}`);
+  if (stats.lastReasonCode) parts.push(`原因 ${stats.lastReasonCode}`);
+  if (stats.lastReason) parts.push(stats.lastReason);
+  if (stats.lastCooldownMs !== undefined) parts.push(`冷却 ${stats.lastCooldownMs}ms`);
+  if (stats.lastRetryAfterMs !== undefined) parts.push(`Retry-After ${stats.lastRetryAfterMs}ms`);
+  if (stats.lastOpenCircuit) parts.push("已打开熔断");
+  if (stats.lastAttemptNumber !== undefined && stats.lastMaxAttempts !== undefined) {
+    parts.push(`预算 ${stats.lastAttemptNumber}/${stats.lastMaxAttempts}（剩余 ${stats.lastBudgetRemaining ?? 0}）`);
+  }
+  return parts.join(" · ") || "暂无故障诊断";
 }
 
 function formatTokens(value: number): string {

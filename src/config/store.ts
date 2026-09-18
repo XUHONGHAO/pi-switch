@@ -48,9 +48,14 @@ export class ConfigStore {
 
   /** Re-read all sections from disk. */
   reload(): PiSwitchConfig {
-    this.config = loadConfig(this.config.configDir);
-    reportValidation(validateConfig(this.config));
-    return this.config;
+    const next = loadConfig(this.config.configDir, { strict: true });
+    const validation = validateConfig(next);
+    reportValidation(validation);
+    if (validation.errors.length > 0) {
+      throw new Error(`invalid configuration:\n${validation.errors.map((error) => `- ${error}`).join("\n")}`);
+    }
+    this.config = next;
+    return next;
   }
 
   /**

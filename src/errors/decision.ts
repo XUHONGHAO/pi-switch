@@ -53,7 +53,12 @@ function riskFor(context: FailureContext): CostRisk {
     case "auth":
     case "rate-limit": return "medium";
     case "server": return isLongContext(context) ? "high" : "medium";
-    case "timeout": return context.contextUsageReliable ? (isLongContext(context) ? "high" : "medium") : "unknown";
+    case "timeout":
+      // A timeout before any HTTP response is observed is generally a
+      // connection/setup failure. Once headers arrive, retrying can resend a
+      // long prompt after upstream has already started processing it.
+      if (context.phase === "resolving-auth" || context.phase === "connecting") return "low";
+      return context.contextUsageReliable ? (isLongContext(context) ? "high" : "medium") : "unknown";
     case "unknown": return "unknown";
     case "aborted":
     case "context-overflow":

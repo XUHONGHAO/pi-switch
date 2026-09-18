@@ -96,11 +96,11 @@ pi-switch 是 AI Agent Model Gateway & Provider Manager（pi agent Extension）�
 - **failover 计数**：自动切换次数单独统计，反映线路健康度
 - **agent 级粒度**：pi 自动重试不重复计数（`agent_start` + `agent_settled`），每次用户请求只记一条
 - **持久化**：写入 `~/.pi-switch/stats.json`（2s 防抖 + 退出时 flush），跨会话累计
-- **状态展示**：`/switch status` 附带统计摘要
+- **状态展示**：`/switch status` 附带成本统计和最近一次故障决策诊断（状态、阶段、风险、原因、预算）；timeout 会区分连接阶段与响应阶段
 
 ```
 $ /switch status
-Model: pi-switch/gpt5 · Provider: sub2api · Account: sub2api_backup · Latency: 820ms TTFT · 3 req · 100% ok · avg 830ms · 2 failover(s)
+Model: pi-switch/gpt5 · Provider: sub2api · Account: sub2api_backup · Latency: 820ms TTFT · 3 req · 100% ok · avg 830ms · 2 failover(s) · HTTP 503 · route-failover-allowed · medium
 ```
 
 ```json
@@ -120,7 +120,7 @@ Model: pi-switch/gpt5 · Provider: sub2api · Account: sub2api_backup · Latency
 |------|------|
 | `/switch` | 打开模型选择器（TUI 下带线路描述的 SelectList） |
 | `/switch gpt5` | 直接切换到别名 |
-| `/switch status` | 当前模型 + 路由线路 + 账号 + 延迟 |
+| `/switch status` | 当前模型 + 路由线路 + 账号 + 延迟 + 成本与故障决策诊断 |
 | `/switch providers` | 列出所有别名及其线路/账号 |
 | `/switch check` | 静态检查别名、Key 池和 Circuit Breaker 状态（`test` 为兼容别名） |
 | `/switch probe` | 并发请求各 Provider 的 `/models` 端点并输出延迟/状态 |
@@ -175,7 +175,7 @@ failover 效果：主账号 401/限流 → 自动切备用账号，日志显示 
 
 ## Phase 4 能力
 
-- **三种路由策略**：`priority`（固定最高优先级线路）、`failover`（按优先级依次尝试，失败自动切换）、`balance`（轮询）
+- **三种路由策略**：`priority`（固定最高优先级线路）、`failover`（按优先级依次尝试，失败自动切换）、`balance`（默认会话级粘性均衡，可选逐请求轮询）
 - **透明故障切换**：线路在**产生任何内容前**失败时自动切到下一条（failover / balance），用户无感知
 - **策略解析顺序**：models.json 别名级 `strategy` > routing.json 全局 `strategy` > 默认 `priority`
 - **绑定优先级**：绑定可配 `priority` 字段（越小越优先），同优先级保持声明顺序
