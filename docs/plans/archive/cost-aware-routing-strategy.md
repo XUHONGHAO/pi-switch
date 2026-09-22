@@ -1,10 +1,10 @@
 # 成本感知路由策略设计草案
 
-- 状态：in-progress（阶段 0、A、B、C 第一批、D 两批及 E 当前批已完成）
+- 状态：implemented（阶段 0、A、B、C 第一批、D 两批、E 当前批及 cacheDomain 均已完成）
 - 日期：2026-08-13
-- 最近更新：2026-09-18（遗漏修复、验收覆盖与延期范围已收口）
-- 对应需求：[`../requirements/cost-aware-routing.md`](../requirements/cost-aware-routing.md)
-- 已核实契约：[`../architecture/pi-native-passthrough.md`](../architecture/pi-native-passthrough.md)
+- 最近更新：2026-09-22（cacheDomain 按 ADR 0009 开放，计划收口归档）
+- 对应需求：[`../requirements/cost-aware-routing.md`](../../requirements/cost-aware-routing.md)
+- 已核实契约：[`../architecture/pi-native-passthrough.md`](../../architecture/pi-native-passthrough.md)
 - 当前实现参考：`src/router/router.ts`、`src/errors/classify.ts`、`src/provider/alias.ts`
 
 ## 1. 设计摘要
@@ -170,7 +170,7 @@ interface AffinityEntry {
 
 ## 6. pi-ai 缓存与上游亲和透传
 
-> 状态：已完成（阶段 0）。契约事实以 [`../architecture/pi-native-passthrough.md`](../architecture/pi-native-passthrough.md) 为权威来源，下文保留作为设计背景。
+> 状态：已完成（阶段 0）。契约事实以 [`../architecture/pi-native-passthrough.md`](../../architecture/pi-native-passthrough.md) 为权威来源，下文保留作为设计背景。
 
 当前 AliasProvider 已通过 `{ ...options, apiKey, headers }` 调用目标 transport，但需要协议级测试固定以下契约：
 
@@ -393,7 +393,7 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] 为 `sessionId`、`cacheRetention` 和目标模型 `compat` 透传增加协议级回归测试（`tests/alias-native-passthrough.integration.test.ts`）。
 - [x] 验证 OpenAI Completions / Responses / Anthropic Messages 在启用对应 compat 时生成预期缓存键、`cache_control` 与亲和 Header。
 - [x] 未新增自定义缓存协议。
-- 核实结论与各 transport 差异记录在 [`../architecture/pi-native-passthrough.md`](../architecture/pi-native-passthrough.md)。
+- 核实结论与各 transport 差异记录在 [`../architecture/pi-native-passthrough.md`](../../architecture/pi-native-passthrough.md)。
 
 ### 阶段 A：pi 会话亲和与会话级 balance（已完成）
 
@@ -418,7 +418,7 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] 将阶段 B 的当前上下文成本作为决策输入。
 - [x] 替换布尔 failover 判断并补齐错误矩阵单元测试。
 
-阶段 C 第一批已完成；账号/线路分层两批和 timeout 阶段识别已在阶段 D/E 完成，显式 `cacheDomain` 仍待评审。
+阶段 C 第一批已完成；账号/线路分层两批、timeout 阶段识别和显式 `cacheDomain` 已在阶段 D/E 完成。
 
 ### 阶段 D：账号/线路分层
 
@@ -437,15 +437,15 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 ### 阶段 E：增强决策与显式缓存域
 
 - [x] 增加完整决策原因和成本风险诊断：AttemptStats 与 `/switch status` 展示 HTTP 状态、错误阶段、作用域、动作、风险、原因、冷却、熔断和尝试预算。
-- 评审后再开放 `cacheDomain`。
+- [x] 开放 `cacheDomain`：用户声明的缓存共享组，仅参与故障候选排序，并配套跨协议/跨主机误配告警（ADR 0009）。
 - [x] 根据实际 transport 能力细分 timeout 阶段：收到任意 HTTP 响应后进入 `awaiting-response`；连接前 timeout 保持低风险，响应后 timeout 按上下文用量评估。
 - [x] 评估并验证 pi Custom Entry 恢复 `/resume` 与 `/tree` 分支亲和状态；只按 Session ID 哈希匹配，新的 `/new`、`/fork`、`/clone` Session 不继承旧记录。
 
-阶段 E 当前批已完成；`cacheDomain`、账号配额、TUI 原生缓存开关和独立进程重启 E2E 按 ADR 0007 deferred。
+阶段 E 当前批已完成，`cacheDomain` 亦已开放；账号配额、TUI 原生缓存开关和独立进程重启 E2E 按 ADR 0007 deferred。
 
 后续明确范围：
 
-- `cacheDomain`：待确认用户声明语义、候选排序和误配提示后再开放。
+- ~~`cacheDomain`：待确认用户声明语义、候选排序和误配提示后再开放。~~（已完成，见 ADR 0009）
 - 账号配额策略：当前只按账号优先级与故障结果切换，不读取或预测供应商剩余额度。
 - `cacheRetention` / session-affinity UI：当前继续透传 pi 原生选项，由 pi/compat 决定能力；待 transport 能力矩阵评审后再开放配置入口。
 - 独立进程重启 E2E：需要真实 pi session branch fixture，当前单元/集成测试已覆盖哈希匹配、最新记录覆盖和新 Session 隔离。
@@ -475,6 +475,8 @@ sticky: session · route: proxy-b · switched from proxy-a (503, medium risk)
 - [x] Custom Entry 的最新记录覆盖、`/resume` 恢复和新 Session 隔离有回归覆盖；
 - [x] Abort、400、context overflow 决策和已提交内容硬停止有回归覆盖；
 - [x] 不输出 Secret 和原始 Session ID。
+- [x] `cacheDomain` 候选排序（同 binding 账号 → 同域 → 其他）、未声明不重排、跨协议/跨主机告警。
+- [x] 空 `cacheDomain` 被拒绝。
 
 ## 16. 风险与取舍
 

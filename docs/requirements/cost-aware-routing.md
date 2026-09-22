@@ -1,10 +1,13 @@
 # 成本感知的自动路由与会话亲和性
 
-- 状态：accepted
+- 状态：implemented
 - 讨论日期：2026-08-13
-- 最近更新：2026-09-18（遗漏修复、验收覆盖与延期范围已收口）
+- 最近更新：2026-09-22（cacheDomain 落地、宿主级会话亲和 E2E 完成；需求整体收口）
 - 适用范围：pi-switch 自动选路、`failover` 与 `balance`
-- 关联策略：[`../plans/cost-aware-routing-strategy.md`](../plans/cost-aware-routing-strategy.md)
+- 关联策略（已归档）：[`../plans/archive/cost-aware-routing-strategy.md`](../plans/archive/cost-aware-routing-strategy.md)
+
+> 收口说明：第 9 节 17 项验收标准已全部闭环，第 11 项新增宿主级会话亲和 E2E（`tests/host-session-affinity.integration.test.ts`），方法见 [ADR 0010](../decisions/0010-host-level-extension-e2e-harness.md)。
+> 仍有 2 项按 [ADR 0007](../decisions/0007-deferred-cache-domain-and-host-e2e.md) 明确延期：账号配额自动策略、TUI 原生 `cacheRetention`/session-affinity 开关。它们依赖外部契约或产品评审，不计入本次实现状态。
 
 ## 1. 背景
 
@@ -244,12 +247,13 @@ pi-switch 不自行拼装各协议的缓存字段。未明确支持相关参数�
 8. 高成本错误根据成本偏好和预算产生不同决策。（已完成：阶段 C 第一批）
 9. `maxAttempts` 和高成本切换预算能阻止无限或过多重试。（已完成：阶段 C 第一批）
 10. Circuit Breaker 打开的线路不会被选为当前请求的初始线路。（已完成：阶段 E 集成验证）
-11. 自动化测试覆盖上述行为以及配置重载、线路删除和 session 结束后的亲和状态清理。（核心路由、错误硬停止和 balance 分布已覆盖；真实 pi 生命周期 E2E 仍待宿主环境）
+11. 自动化测试覆盖上述行为以及配置重载、线路删除和 session 结束后的亲和状态清理。（已完成：核心路由、错误硬停止和 balance 分布由单元/集成测试覆盖；真实 pi 宿主生命周期由 `tests/host-session-affinity.integration.test.ts` 通过 `DefaultResourceLoader` + `AgentSession.bindExtensions` 验证持久化恢复与新 session 隔离，见 ADR 0010）
 12. 用户文档明确说明跨线路缓存不可保证、自动切换可能重复计费。（已完成：README 与安装指南）
 13. AliasProvider 转发不会丢失 `options.sessionId`、`cacheRetention` 和目标模型 `compat`，并有协议级回归测试。
 14. 成本决策能接收 pi 的上下文用量；用量未知时采用明确的保守语义。（已完成：阶段 B/C 第一批）
 15. 统计能记录上游实际 `cacheRead`、`cacheWrite` 和 cost；首版不以这些历史数据自动改变线路选择。
 16. `/resume` 能恢复稳定亲和语义，`/new`、`/fork`、`/clone` 按新 Session ID 重新初选。（已完成：阶段 E Custom Entry 分支回归验证）
+17. 声明了 `cacheDomain` 的线路在故障候选排序中优先于未声明线路的其他线路；同 binding 账号仍最优先；未声明时不改变现有顺序；跨协议/跨主机声明产生配置告警。（已完成：ADR 0009）
 
 ## 10. 兼容与迁移
 
@@ -261,10 +265,10 @@ pi-switch 不自行拼装各协议的缓存字段。未明确支持相关参数�
 ## 11. 已决策与延期事项
 
 1. 亲和键已确定以 pi Session ID + alias 为基础；是否还加入配置 generation 仅用于失效控制，不能替代 pi Session ID。
-2. Custom Entry 已用于 `/resume` 和 `/tree` 分支亲和恢复；独立进程重启的真实 pi E2E deferred，等待隔离的 pi Session fixture。
+2. Custom Entry 已用于 `/resume` 和 `/tree` 分支亲和恢复；宿主级 E2E 已由 `tests/host-session-affinity.integration.test.ts` 覆盖（新扩展实例 + `SessionManager.open` 读取持久化条目），见 ADR 0010。真实操作系统进程重启仍可作为后续加强项。
 3. `maxAttempts`、高成本预算和成本偏好的默认值。（已确定：`maxAttempts=2`、`maxHighCostFailovers=1`、`failureCostPolicy=balanced`、`failoverOnUnknown=false`）
 4. 403 与 timeout 的当前 transport 阶段信息已确认；更细 DNS/TLS/首 Token 事件仍不伪造。
-5. `cacheDomain` 暂不开放；等待可验证的 provider/transport 共享缓存契约和误配检测设计。
+5. `cacheDomain` 已开放为用户声明的缓存共享组，仅参与故障候选排序并配套误配告警；实现见 [`../decisions/0009-cache-domain-declaration-and-ordering.md`](../decisions/0009-cache-domain-declaration-and-ordering.md)。
 6. 配置重载会重建运行时并从当前 session branch 恢复当前会话的有效亲和；其他未恢复会话的内存映射会清空。
 7. TUI 暂不复制 `cacheRetention` 和 session-affinity 开关；继续透传 pi 原生选项，待 transport 能力矩阵评审后再决定。
 8. `cacheRead` / `cacheWrite` 仍按 provider Usage 口径展示，UI 不做跨线路严格可比承诺；后续若增加聚合视图再单独定义归一化。

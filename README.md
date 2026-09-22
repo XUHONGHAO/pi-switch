@@ -277,12 +277,14 @@ pi-switch 支持为模型配置思考级别映射，让你可以使用 `Shift+Ta
         "provider": "openai_compatible",
         "model": "gpt-5",
         "priority": 1,
-        "accounts": ["main_key", "backup_key"]
+        "accounts": ["main_key", "backup_key"],
+        "cacheDomain": "openai-main"
       },
       {
         "provider": "openai_compatible",
         "model": "gpt-5",
-        "priority": 2
+        "priority": 2,
+        "cacheDomain": "openai-main"
       }
     ]
   }
@@ -290,6 +292,8 @@ pi-switch 支持为模型配置思考级别映射，让你可以使用 `Shift+Ta
 ```
 
 `contextWindow` 的默认值为 `200000`，使用默认值时可以省略。
+
+`cacheDomain` 是用户声明的缓存共享组：故障切换时，与当前线路属于同一 `cacheDomain` 的线路会排在未声明的线路之前，让会话尽量留在可能共享 Prompt Cache 的上游。它只影响故障候选顺序，不改变新会话的初始选路，也不保证上游真的共享缓存；同一 `cacheDomain` 跨越多个协议或主机时会产生配置告警。
 
 ### 多账号 Key 池示例
 

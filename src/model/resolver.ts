@@ -50,6 +50,8 @@ export interface ResolvedBinding {
   accountName?: string;
   /** Account priority for ordering within a binding. */
   accountPriority?: number;
+  /** User-declared cache-sharing group (see ModelProviderBinding.cacheDomain). */
+  cacheDomain?: string;
 }
 
 export class ModelResolver {
@@ -96,6 +98,7 @@ export class ModelResolver {
         baseUrl: effectiveBaseUrl,
         ...(binding.accounts ? { accountNames: [...binding.accounts] } : {}),
         ...(binding.priority !== undefined ? { priority: binding.priority } : {}),
+        ...(binding.cacheDomain && binding.cacheDomain.trim() ? { cacheDomain: binding.cacheDomain.trim() } : {}),
         ...(resolvedKey ? { apiKey: resolvedKey } : {}),
         ...((provider.headers || binding.headers) ? { headers: { ...(provider.headers ?? {}), ...(binding.headers ?? {}) } } : {}),
         ...(binding.compat ?? provider.compat ? { compat: { ...(provider.compat ?? {}), ...(binding.compat ?? {}) } as never } : {}),

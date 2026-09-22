@@ -16,4 +16,4 @@
 当前文档：
 
 - [`product-scope.md`](product-scope.md)：已实现的产品范围与核心行为基线。
-- [`cost-aware-routing.md`](cost-aware-routing.md)：成本感知自动路由与会话亲和性需求（draft；透传契约部分已实现）。
+- [`cost-aware-routing.md`](cost-aware-routing.md)：成本感知自动路由与会话亲和性需求（implemented；宿主级 E2E、账号配额、TUI 原生缓存开关按 ADR 0007 延期）。

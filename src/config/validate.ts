@@ -199,6 +199,15 @@ function finiteNumber(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function hostOf(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Validate all configuration sections and their cross-references. */
 export function validateConfig(config: PiSwitchConfig): ValidationResult {
   const errors: string[] = [];
@@ -396,7 +405,46 @@ export function validateConfig(config: PiSwitchConfig): ValidationResult {
       if (binding.priority !== undefined && !finiteNumber(binding.priority)) {
         errors.push(`${bindingPath}.priority: expected a finite number`);
       }
+      if (binding.cacheDomain !== undefined && (typeof binding.cacheDomain !== "string" || !binding.cacheDomain.trim())) {
+        errors.push(`${bindingPath}.cacheDomain: expected a non-empty string`);
+      }
     });
+  }
+
+  // cacheDomain misconfiguration detection. A cache domain is a user
+  // assertion that its bindings share prompt cache; flag declarations that
+  // cross protocol boundaries or upstream hosts where that is unlikely.
+  const cacheDomains = new Map<string, { path: string; api?: string; host?: string }[]>();
+  for (const [alias, raw] of modelEntries) {
+    if (!isRecord(raw) || !Array.isArray(raw.providers)) continue;
+    raw.providers.forEach((binding, index) => {
+      if (!isRecord(binding) || typeof binding.cacheDomain !== "string" || !binding.cacheDomain.trim()) return;
+      const provider = typeof binding.provider === "string" ? configuredProviders[binding.provider] : undefined;
+      const providerRecord = isRecord(provider) ? provider : undefined;
+      const api = providerRecord
+        ? inferApi(providerRecord.type as string, typeof binding.api === "string" ? binding.api as never : providerRecord.api as never)
+        : undefined;
+      const baseUrl = providerRecord
+        ? (typeof binding.baseUrl === "string" ? binding.baseUrl : typeof providerRecord.baseUrl === "string" ? providerRecord.baseUrl : undefined)
+        : undefined;
+      const entries = cacheDomains.get(binding.cacheDomain.trim()) ?? [];
+      entries.push({
+        path: `models.json:${alias}.providers[${index}]`,
+        ...(typeof api === "string" ? { api } : {}),
+        ...(hostOf(baseUrl) ? { host: hostOf(baseUrl)! } : {}),
+      });
+      cacheDomains.set(binding.cacheDomain.trim(), entries);
+    });
+  }
+  for (const [domain, entries] of cacheDomains) {
+    const apis = new Set(entries.map((entry) => entry.api).filter((value): value is string => Boolean(value)));
+    if (apis.size > 1) {
+      warnings.push(`models.json: cacheDomain "${domain}" spans multiple API protocols (${[...apis].join(", ")}); shared prompt cache is not guaranteed`);
+    }
+    const hosts = new Set(entries.map((entry) => entry.host).filter((value): value is string => Boolean(value)));
+    if (hosts.size > 1) {
+      warnings.push(`models.json: cacheDomain "${domain}" spans multiple hosts (${[...hosts].join(", ")}); shared prompt cache is not guaranteed`);
+    }
   }
 
   const routing = config.routing as unknown;

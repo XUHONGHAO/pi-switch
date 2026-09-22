@@ -683,6 +683,34 @@ describe("v0.3.2 correctness", () => {
     expect(result.errors.some((error) => error.includes("duplicate resolved line identity"))).toBe(true);
   });
 
+  it("rejects an empty cacheDomain and warns on cross-protocol or cross-host domains", () => {
+    const providers = {
+      p: { type: "openai", baseUrl: "https://a.example/v1" },
+      q: { type: "anthropic", baseUrl: "https://b.example/v1" },
+    };
+
+    const invalid = validateConfig(config({
+      providers,
+      models: { bad: { providers: [{ provider: "p", model: "m", cacheDomain: "" }] } },
+    }));
+    expect(invalid.errors.some((error) => error.includes("cacheDomain"))).toBe(true);
+
+    const crossBoundary = validateConfig(config({
+      providers,
+      models: {
+        shared: {
+          providers: [
+            { provider: "p", model: "gpt", cacheDomain: "shared" },
+            { provider: "q", model: "gpt", cacheDomain: "shared" },
+          ],
+        },
+      },
+    }));
+    expect(crossBoundary.errors).toEqual([]);
+    expect(crossBoundary.warnings.some((warning) => warning.includes('cacheDomain "shared" spans multiple API protocols'))).toBe(true);
+    expect(crossBoundary.warnings.some((warning) => warning.includes('cacheDomain "shared" spans multiple hosts'))).toBe(true);
+  });
+
   it("falls back from an affinity entry when its line is removed", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-switch-affinity-removal-"));
     tempDirs.push(dir);

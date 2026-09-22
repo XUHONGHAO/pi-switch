@@ -4,7 +4,9 @@
 
 ### Added
 
-- **Deferred scope documented**: `cacheDomain`, account quota automation, TUI-owned native cache switches and host-level process-restart E2E are explicitly deferred with entry criteria in ADR 0007.
+- **Explicit cache domains**: bindings may declare `cacheDomain` to mark routes the user expects to share prompt cache. On failover, candidates are ordered same-binding accounts -> same cache domain -> remaining routes; it never changes initial selection. Config validation rejects empty values and warns when a domain spans multiple API protocols or hosts. See ADR 0009.
+- **Host-level affinity E2E**: `tests/host-session-affinity.integration.test.ts` loads the real extension through pi's `DefaultResourceLoader`, drives real `AgentSession` turns, and verifies that a post-failover route is persisted as a Custom Entry and restored by a fresh extension instance via `SessionManager.open`. Harness details in ADR 0010.
+- **Deferred scope documented**: account quota automation and TUI-owned native cache switches remain explicitly deferred with entry criteria in ADR 0007.
 - **Routing hardening**: connection errors such as `Connection error.` now classify as network failures; invalid external reloads are rejected without replacing the last valid config; duplicate implicit binding identities are rejected; and abnormal streams update the last failed route correctly.
 - **Phase E current batch**: verifies Custom Entry affinity restoration for resumed/tree branches, uses the latest persisted entry, and prevents `/new`, `/fork` and `/clone` sessions from inheriting the parent session's route or account.
 - **Phase E second batch**: classifies timeout cost risk by request phase; connection/setup timeouts remain low risk, while timeouts after HTTP response use context length and policy to detect high-cost retries. Any received HTTP response now advances diagnostics to `awaiting-response`, including non-2xx responses.

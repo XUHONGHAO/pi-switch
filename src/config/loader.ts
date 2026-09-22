@@ -140,6 +140,13 @@ export interface ModelProviderBinding {
   accounts?: string[];
   /** Routing priority (lower = preferred). Defaults to declaration order. */
   priority?: number;
+  /**
+   * User-declared cache-sharing group. When a failover candidate set contains
+   * bindings with the same non-empty value as the active binding, those
+   * bindings are tried before unrelated routes. This is a user assertion, not
+   * an upstream guarantee that the prompt cache is actually shared.
+   */
+  cacheDomain?: string;
 }
 
 /** A model alias entry from models.json, e.g. "gpt5". */

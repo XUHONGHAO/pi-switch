@@ -179,6 +179,7 @@ export class Router {
     // Check session affinity (only for session-scoped balance and failover).
     const scope = this.balanceScope();
     const useAffinity = strategy === "failover" || (strategy === "balance" && scope === "session");
+    const canFailover = strategy === "failover" || strategy === "balance";
     if (useAffinity) {
       const affinity = this.getAffinity(sessionId, alias, attempts);
       if (affinity) {
@@ -187,38 +188,61 @@ export class Router {
         return {
           binding: affinity,
           strategy,
-          attempts: filtered,
-          canFailover: strategy === "failover" || strategy === "balance",
+          attempts: this.preferCacheDomain(affinity, filtered),
+          canFailover,
           affinityHit: true,
         };
       }
     }
 
     // Initial selection: no affinity yet.
+    let selected: ResolvedBinding;
     if (strategy === "balance" && attempts.length > 1) {
       if (scope === "session" && sessionId) {
         // Session-scoped balance: rendezvous hash (deterministic).
-        const chosen = this.rendezvousHash(sessionId, alias, attempts);
-        const rotated = [chosen, ...attempts.filter((b) => b !== chosen)];
-        return { binding: chosen, strategy, attempts: rotated, canFailover: true, affinityHit: false };
+        selected = this.rendezvousHash(sessionId, alias, attempts);
       } else {
         // Request-scoped balance: round-robin (legacy behavior).
         const counter = this.counters.get(alias) ?? 0;
-        const start = counter % attempts.length;
-        const rotated = [...attempts.slice(start), ...attempts.slice(0, start)];
+        selected = attempts[counter % attempts.length];
         this.counters.set(alias, counter + 1);
-        return { binding: rotated[0], strategy, attempts: rotated, canFailover: true, affinityHit: false };
       }
+    } else {
+      // priority / failover both start at the first candidate.
+      selected = attempts[0];
     }
-
-    // priority / failover both start at the first candidate.
+    const ordered = [selected, ...attempts.filter((b) => b !== selected)];
     return {
-      binding: attempts[0],
+      binding: selected,
       strategy,
-      attempts,
-      canFailover: strategy === "failover",
+      attempts: this.preferCacheDomain(selected, ordered),
+      canFailover,
       affinityHit: false,
     };
+  }
+
+  /**
+   * Reorder failover alternatives to prefer bindings that the user declared
+   * as sharing a cache domain with the active binding. Ordering tiers:
+   *   1. other accounts on the same binding (same line identity),
+   *   2. bindings with the same explicit cacheDomain,
+   *   3. remaining bindings in strategy order.
+   * Only applies when the active binding declares a cacheDomain.
+   */
+  private preferCacheDomain(primary: ResolvedBinding, ordered: ResolvedBinding[]): ResolvedBinding[] {
+    const domain = primary.cacheDomain;
+    if (!domain) return ordered;
+    const primaryLine = this.bindingIdentity(primary);
+    const sameRoute: ResolvedBinding[] = [];
+    const sameDomain: ResolvedBinding[] = [];
+    const rest: ResolvedBinding[] = [];
+    for (const binding of ordered) {
+      if (binding === primary) continue;
+      if (this.bindingIdentity(binding) === primaryLine) sameRoute.push(binding);
+      else if (binding.cacheDomain === domain) sameDomain.push(binding);
+      else rest.push(binding);
+    }
+    return [primary, ...sameRoute, ...sameDomain, ...rest];
   }
 
   /** Reset round-robin state and affinity (e.g. on config reload). */
