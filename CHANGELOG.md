@@ -24,6 +24,7 @@
 
 ### Documentation
 
+- Streamlined `README.md` into a concise GitHub landing page; detailed config field references now live in `docs/guides/installation.md` (including `cacheDomain`).
 - Added `docs/architecture/pi-native-passthrough.md` describing which cache and session-affinity fields each pi-ai transport generates, and under which `compat` preconditions.
 
 ## 0.3.2 - 2026-08-13

@@ -280,6 +280,7 @@ pi> /switch status        # 查看当前线路与统计
 | `model` | 发送给该 Provider 的模型 ID |
 | `authProvider` | 可选，委托给指定 pi Provider 解析 `/login`、OAuth 和动态 Header |
 | `priority` | 路由优先级（越小越优先，默认按声明顺序） |
+| `cacheDomain` | 用户声明的缓存共享组：故障切换时优先尝试同组线路。空值非法；同一组跨协议或跨主机会产生配置告警 |
 | `api` | binding 协议覆盖，可让同一 alias 在不同线路使用不同协议 |
 | `baseUrl` / `headers` | binding 级 endpoint 和 Header 覆盖 |
 | `compat` | pi-ai 协议兼容参数覆盖 |
